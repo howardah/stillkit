@@ -1,6 +1,6 @@
 use clap::{Arg, ArgAction, Command};
 
-mod photos;
+mod file;
 mod sort;
 
 fn main() {
