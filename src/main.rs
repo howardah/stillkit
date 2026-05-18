@@ -4,7 +4,7 @@ mod file;
 mod sort;
 
 fn main() {
-    let matches = Command::new("photool")
+    let matches = Command::new("pht")
         .about("Sort files into directories")
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand_required(false)
@@ -37,12 +37,12 @@ fn main() {
                 .action(ArgAction::SetTrue),
         )
         .subcommand(sort::subcommand())
-        .subcommand(photos::subcommand())
+        .subcommand(file::subcommand())
         .get_matches();
 
     match matches.subcommand() {
         Some(("sort", sub_m)) => sort::run(sub_m),
-        Some(("photos", sub_m)) => photos::run(sub_m),
+        Some(("photos", sub_m)) => file::run(sub_m),
         _ => {
             if matches.get_one::<String>("directory").is_some() {
                 sort::run(&matches);
