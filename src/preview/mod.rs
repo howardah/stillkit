@@ -5,6 +5,7 @@ use rayon::prelude::*;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 use std::time::Duration;
 
 /// Supported output image formats
@@ -95,16 +96,28 @@ pub fn subcommand() -> Command {
 }
 
 pub fn run(matches: &clap::ArgMatches) {
-    let input_dir = matches
+    let input_path = matches
         .get_one::<String>("input")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().expect("Cannot determine current directory"));
 
     let output_dir_name = matches.get_one::<String>("output").unwrap();
-    let output_dir = input_dir
-        .parent()
-        .unwrap_or(&input_dir)
-        .join(output_dir_name);
+
+    // Determine input type and output directory
+    let (input_dir, output_dir, is_single_file) = if input_path.is_file() {
+        let output_dir = input_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(output_dir_name);
+        (
+            input_path.parent().unwrap_or_else(|| Path::new(".")),
+            output_dir,
+            true,
+        )
+    } else {
+        let output_dir = input_path.join(output_dir_name);
+        (input_path.as_path(), output_dir, false)
+    };
 
     let max_dimension: u32 = matches
         .get_one::<String>("max_size")
@@ -117,14 +130,71 @@ pub fn run(matches: &clap::ArgMatches) {
     let recursive = matches.get_flag("recursive");
 
     let config = PreviewConfig {
-        input_dir,
+        input_dir: input_dir.to_path_buf(),
         output_dir,
         max_dimension,
         format,
         recursive,
     };
 
-    generate_previews(&config);
+    if is_single_file {
+        // Handle single file directly
+        let input_file = input_path;
+        let relative_path = input_file
+            .file_name()
+            .unwrap_or_else(|| input_file.as_os_str());
+        let output_path = config
+            .output_dir
+            .join(relative_path)
+            .with_extension(config.format.extension());
+
+        // Create output directory
+        fs::create_dir_all(&config.output_dir)
+            .map_err(|e| {
+                eprintln!(
+                    "Error creating directory {}: {}",
+                    config.output_dir.display(),
+                    e
+                )
+            })
+            .ok();
+
+        println!(
+            "Generating preview: max dimension: {}, format: {}, output: {}",
+            config.max_dimension,
+            config.format.extension(),
+            output_path.display()
+        );
+
+        let progress = ProgressBar::new(1);
+        progress.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} {msg} [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .expect("valid progress template")
+            .progress_chars("=> "),
+        );
+        progress.set_message("Generating preview");
+
+        match do_generate_preview(
+            &input_file,
+            &output_path,
+            config.max_dimension,
+            config.format,
+        ) {
+            Ok(_) => {
+                progress.inc(1);
+                progress.finish_with_message("Generated 1 preview");
+            }
+            Err(e) => {
+                progress.inc(1);
+                progress.finish_with_message("Failed");
+                eprintln!("Error: {}", e);
+            }
+        }
+    } else {
+        generate_previews(&config);
+    }
 }
 
 /// Generate preview images based on configuration
@@ -159,47 +229,45 @@ fn generate_previews(config: &PreviewConfig) {
     // Process images in parallel
     let results: Vec<Result<PathBuf, String>> = image_paths
         .par_iter()
-        .map(|path| {
-            let relative_path = path.strip_prefix(&config.input_dir).unwrap_or(path);
-            let mut output_path = config.output_dir.join(relative_path);
+        .map_init(
+            || progress.clone(),
+            |progress, path| {
+                let relative_path = path.strip_prefix(&config.input_dir).unwrap_or(path);
+                let mut output_path = config.output_dir.join(relative_path);
 
-            // Create parent directories
-            if let Some(parent) = output_path.parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    return Err(format!(
-                        "Error creating directory {}: {}",
-                        parent.display(),
-                        e
-                    ));
+                // Create parent directories
+                if let Some(parent) = output_path.parent() {
+                    if let Err(e) = fs::create_dir_all(parent) {
+                        progress.inc(1);
+                        return Err(format!(
+                            "Error creating directory {}: {}",
+                            parent.display(),
+                            e
+                        ));
+                    }
                 }
-            }
 
-            // Change extension to output format
-            output_path = output_path.with_extension(config.format.extension());
+                // Change extension to output format
+                output_path = output_path.with_extension(config.format.extension());
 
-            match do_generate_preview(path, &output_path, config.max_dimension, config.format) {
-                Ok(_) => Ok(output_path),
-                Err(e) => Err(e),
-            }
-        })
+                let result =
+                    do_generate_preview(path, &output_path, config.max_dimension, config.format)
+                        .map(|_| output_path);
+                progress.inc(1);
+                result
+            },
+        )
         .collect();
 
-    // Update progress and handle errors
-    let mut success_count = 0;
-    let mut error_count = 0;
-
-    for result in results {
-        match result {
-            Ok(_) => {
-                success_count += 1;
-            }
-            Err(e) => {
-                error_count += 1;
-                progress.println(e);
-            }
+    // Count errors and print them
+    let error_count = results.iter().filter(|r| r.is_err()).count();
+    for result in &results {
+        if let Err(e) = result {
+            progress.println(e);
         }
-        progress.inc(1);
     }
+
+    let success_count = image_paths.len() - error_count;
 
     progress.finish_with_message(format!(
         "Generated {} previews ({} errors)",
@@ -273,11 +341,25 @@ fn do_generate_preview(
     max_dimension: u32,
     format: OutputFormat,
 ) -> Result<(), String> {
-    // Open the image
-    let img = image::ImageReader::open(input_path)
-        .map_err(|e| format!("Failed to open image {}: {}", input_path.display(), e))?
-        .decode()
-        .map_err(|e| format!("Failed to decode image {}: {}", input_path.display(), e))?;
+    // HEIC/HEIF needs the dedicated decoder path.
+    let is_heic = input_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "heic" | "heif"))
+        .unwrap_or(false);
+
+    if is_heic && try_generate_heic_preview_with_magick(input_path, output_path, max_dimension)? {
+        return Ok(());
+    }
+
+    let img = if is_heic {
+        load_heic_image(input_path)?
+    } else {
+        image::ImageReader::open(input_path)
+            .map_err(|e| format!("Failed to open image {}: {}", input_path.display(), e))?
+            .decode()
+            .map_err(|e| format!("Failed to decode image {}: {}", input_path.display(), e))?
+    };
 
     // Calculate new dimensions maintaining aspect ratio
     let (width, height) = img.dimensions();
@@ -307,6 +389,69 @@ fn do_generate_preview(
     Ok(())
 }
 
+fn try_generate_heic_preview_with_magick(
+    input_path: &Path,
+    output_path: &Path,
+    max_dimension: u32,
+) -> Result<bool, String> {
+    let output = match ProcessCommand::new("magick")
+        .arg(input_path)
+        .arg("-auto-orient")
+        .arg("-resize")
+        .arg(format!("{max_dimension}x{max_dimension}>"))
+        .arg(output_path)
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(format!(
+                "Failed to launch ImageMagick for {}: {}",
+                input_path.display(),
+                err
+            ));
+        }
+    };
+
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "ImageMagick failed to convert {}: {}",
+        input_path.display(),
+        stderr.trim()
+    ))
+}
+
+/// Load a HEIC image using the heic crate
+fn load_heic_image(path: &Path) -> Result<DynamicImage, String> {
+    use heic::{DecoderConfig, PixelLayout};
+
+    let data = fs::read(path)
+        .map_err(|e| format!("Failed to read HEIC file {}: {}", path.display(), e))?;
+
+    // Best-effort fallback when no system HEIC decoder is available.
+    let output = DecoderConfig::new()
+        .decode(&data, PixelLayout::Rgba8)
+        .map_err(|e| format!("Failed to decode HEIC image {}: {}", path.display(), e))?;
+
+    let expected_bytes = output.width as usize * output.height as usize * 4;
+    let actual_bytes = output.data.len();
+    let rgba_image = image::RgbaImage::from_raw(output.width, output.height, output.data)
+        .ok_or_else(|| {
+            format!(
+                "Failed to create image from HEIC data for {} (expected {} bytes, got {} bytes)",
+                path.display(),
+                expected_bytes,
+                actual_bytes
+            )
+        })?;
+
+    Ok(DynamicImage::ImageRgba8(rgba_image))
+}
+
 /// Calculate new dimensions maintaining aspect ratio
 fn calculate_dimensions(width: u32, height: u32, max_dimension: u32) -> (u32, u32) {
     if width > height {
@@ -317,5 +462,54 @@ fn calculate_dimensions(width: u32, height: u32, max_dimension: u32) -> (u32, u3
         let new_height = max_dimension;
         let new_width = (width as f32 * (new_height as f32 / height as f32)) as u32;
         (new_width.max(1), new_height)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process;
+
+    #[test]
+    fn previews_heic_without_whiteout_when_magick_is_available() {
+        if ProcessCommand::new("magick")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/DSCF1164.HEIC");
+        let output_path =
+            std::env::temp_dir().join(format!("photool-preview-heic-{}.jpg", process::id()));
+        let _ = fs::remove_file(&output_path);
+
+        try_generate_heic_preview_with_magick(&path, &output_path, 1000)
+            .expect("ImageMagick HEIC preview should succeed");
+
+        let image = image::open(&output_path).expect("generated preview should be readable");
+        let rgb = image.to_rgb8();
+
+        let step_x = (rgb.width() / 16).max(1) as usize;
+        let step_y = (rgb.height() / 16).max(1) as usize;
+        let mut total = 0u64;
+        let mut samples = 0u64;
+
+        for y in (0..rgb.height() as usize).step_by(step_y) {
+            for x in (0..rgb.width() as usize).step_by(step_x) {
+                let pixel = rgb.get_pixel(x as u32, y as u32);
+                total += u64::from(pixel[0]) + u64::from(pixel[1]) + u64::from(pixel[2]);
+                samples += 3;
+            }
+        }
+
+        let average = total as f64 / samples as f64;
+        assert!(
+            average < 220.0,
+            "decoded HEIC output is unexpectedly blown out: {average}"
+        );
+
+        let _ = fs::remove_file(output_path);
     }
 }

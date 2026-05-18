@@ -13,11 +13,7 @@ pub fn day_dir_name(start: NaiveDate, end: NaiveDate) -> String {
     if start == end {
         start.format("%Y-%m-%d").to_string()
     } else {
-        format!(
-            "{} - {}",
-            start.format("%Y-%m-%d"),
-            end.format("%Y-%m-%d")
-        )
+        format!("{} - {}", start.format("%Y-%m-%d"), end.format("%Y-%m-%d"))
     }
 }
 

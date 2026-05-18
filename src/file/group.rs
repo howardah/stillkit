@@ -28,8 +28,8 @@ pub fn cluster_by_date(mut files: Vec<PhotoFile>) -> Vec<Cluster> {
         } else {
             let last_date = current.last().unwrap().date;
             let gap = (file.date - last_date).num_days();
-            let same_month = file.date.year() == last_date.year()
-                && file.date.month() == last_date.month();
+            let same_month =
+                file.date.year() == last_date.year() && file.date.month() == last_date.month();
 
             if same_month && gap <= 2 {
                 current.push(file);

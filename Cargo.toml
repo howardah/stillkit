@@ -1,6 +1,6 @@
 [package]
 name = "photool"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 
 [[bin]]
@@ -15,3 +15,4 @@ walkdir = "2"
 indicatif = "0.18.4"
 rayon = "1.10"
 image = "0.25"
+heic = "0.1.4"
