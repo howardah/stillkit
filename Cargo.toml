@@ -1,7 +1,11 @@
 [package]
-name = "file-sort"
-version = "0.1.2"
+name = "photool"
+version = "0.1.5"
 edition = "2024"
+
+[[bin]]
+name = "pht"
+path = "src/main.rs"
 
 [dependencies]
 clap = "4.5.45"

@@ -4,11 +4,11 @@ mod photos;
 mod sort;
 
 fn main() {
-    let matches = Command::new("file-sort")
+    let matches = Command::new("photool")
         .about("Sort files into directories")
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand_required(false)
-        // Top-level args kept for backwards compatibility with `file-sort <directory>`
+        // Top-level args kept for backwards compatibility with `photool <directory>`
         .arg(
             Arg::new("directory")
                 .help("The directory to sort (extension sort mode)")

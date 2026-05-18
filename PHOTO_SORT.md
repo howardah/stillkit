@@ -12,18 +12,18 @@ The `photos` subcommand automates organizing camera photos into a date-based dir
 ## CLI Shape
 
 ```
-file-sort photos [OUTPUT] [-o OUTPUT] [-i INPUT] [-r] [--dry-run]
+photool photos [OUTPUT] [-o OUTPUT] [-i INPUT] [-r] [--dry-run]
 ```
 
-| Argument | Description |
-|---|---|
-| `OUTPUT` (positional) | Destination directory. Defaults to current directory. |
-| `-o` / `--output` | Alternative way to specify destination. Conflicts with positional arg. |
-| `-i` / `--input` | Source directory. When absent the tool runs in sort mode. |
-| `-r` / `--recursive` | Recurse into subdirectories of the input. Without this flag only the top level of the input dir is scanned. |
-| `--dry-run` | Print intended actions; do not move or create anything. |
+| Argument              | Description                                                                                                 |
+| --------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `OUTPUT` (positional) | Destination directory. Defaults to current directory.                                                       |
+| `-o` / `--output`     | Alternative way to specify destination. Conflicts with positional arg.                                      |
+| `-i` / `--input`      | Source directory. When absent the tool runs in sort mode.                                                   |
+| `-r` / `--recursive`  | Recurse into subdirectories of the input. Without this flag only the top level of the input dir is scanned. |
+| `--dry-run`           | Print intended actions; do not move or create anything.                                                     |
 
-The existing extension-based sorter remains the default `file-sort <directory>` invocation for backwards compatibility. A `sort` subcommand alias is also added so `file-sort sort <directory>` works identically.
+The existing extension-based sorter remains the default `photool <directory>` invocation for backwards compatibility. A `sort` subcommand alias is also added so `photool sort <directory>` works identically.
 
 ---
 
@@ -57,13 +57,13 @@ A group is formed from photos whose dates are no more than 2 calendar days apart
 
 ### File placement
 
-| Extension | Destination within the day dir |
-|---|---|
-| `.jpg`, `.jpeg`, `.heic` | Day dir root |
-| `.mp4`, `.mov` | Day dir root |
-| `.raf`, `.cr2`, `.nef`, `.arw`, `.dng`, `.rw2`, and other non-listed types *when JPG/HEIC/MP4/MOV also exist in the group* | `RAW/` sub-subdirectory |
-| Any non-listed types *when no JPG/HEIC/MP4/MOV exist in the group* | Day dir root |
-| Multiple differing non-listed extensions in the same group | Sorted into per-extension subdirectories using the existing extension-sort logic |
+| Extension                                                                                                                  | Destination within the day dir                                                   |
+| -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `.jpg`, `.jpeg`, `.heic`                                                                                                   | Day dir root                                                                     |
+| `.mp4`, `.mov`                                                                                                             | Day dir root                                                                     |
+| `.raf`, `.cr2`, `.nef`, `.arw`, `.dng`, `.rw2`, and other non-listed types _when JPG/HEIC/MP4/MOV also exist in the group_ | `RAW/` sub-subdirectory                                                          |
+| Any non-listed types _when no JPG/HEIC/MP4/MOV exist in the group_                                                         | Day dir root                                                                     |
+| Multiple differing non-listed extensions in the same group                                                                 | Sorted into per-extension subdirectories using the existing extension-sort logic |
 
 The RAW subdir only exists when there are "primary" files (JPG/HEIC/MP4/MOV) to distinguish from. If a group contains only raw files, they are placed in the day dir root. If a group contains a mix of unlisted types (e.g. `.raf` and `.xmp`), those types each get their own subdir via the existing extension-sort logic.
 
@@ -107,8 +107,9 @@ chrono = "0.4"    # date arithmetic and formatting
 4. **Check for an existing day dir** in `<output>/<month-dir>/`. A dir matches if either:
    - it contains at least one photo with the **same calendar date**, or
    - the incoming photo's date falls **strictly between** the earliest and latest dates of photos already in that dir (i.e. the photo slots into an existing range even if no photo shares its exact date).
-   
+
    If a match is found, use that dir regardless of its name.
+
 5. If no matching existing dir is found, batch newly-imported files by clusters (same gap ≤ 2 days logic) to derive a new day-dir name.
 6. **Duplicate detection**: if a file with the **same name** already exists in the target dir and its EXIF date matches, skip it and leave it in the input directory. Print a notice.
 7. In dry-run: print each planned move/skip. Otherwise move files.
@@ -116,6 +117,7 @@ chrono = "0.4"    # date arithmetic and formatting
 #### Finding the matching existing day dir
 
 For each candidate subdirectory under `<output>/<month-dir>/`:
+
 - Scan its root and any `RAW/` subdir for photo files.
 - Collect their EXIF dates and derive a `(min_date, max_date)` range.
 - The dir **matches** the incoming file if:
@@ -147,6 +149,7 @@ This scan is done lazily per month, building a `(min_date, max_date, path) → e
 ### Scenario 1 — Sort mode, single day
 
 **Before** (`/Photos/` root):
+
 ```
 IMG_001.jpg   (EXIF: 2026-04-15)
 IMG_002.heic  (EXIF: 2026-04-15)
@@ -154,6 +157,7 @@ IMG_003.raf   (EXIF: 2026-04-15)
 ```
 
 **After**:
+
 ```
 2026 - 04 April/
   2026-04-15/
@@ -170,6 +174,7 @@ IMG_003.raf   (EXIF: 2026-04-15)
 Photos within 2 days of each other are grouped; a gap of 3+ days starts a new group.
 
 **Before** (`/Photos/` root):
+
 ```
 IMG_001.jpg   (EXIF: 2026-04-15)
 IMG_002.jpg   (EXIF: 2026-04-17)   ← 2 days after 15th → same group
@@ -178,6 +183,7 @@ IMG_004.jpg   (EXIF: 2026-04-21)
 ```
 
 **After**:
+
 ```
 2026 - 04 April/
   2026-04-15 - 2026-04-17/
@@ -195,12 +201,14 @@ IMG_004.jpg   (EXIF: 2026-04-21)
 When a group contains no JPG/HEIC/MP4/MOV files, raw files are placed in the day dir root rather than a `RAW/` subdir.
 
 **Before** (`/Photos/` root):
+
 ```
 IMG_001.raf  (EXIF: 2026-04-15)
 IMG_002.raf  (EXIF: 2026-04-15)
 ```
 
 **After**:
+
 ```
 2026 - 04 April/
   2026-04-15/
@@ -215,6 +223,7 @@ IMG_002.raf  (EXIF: 2026-04-15)
 When a group has multiple different unlisted extension types alongside primary files, non-primary types each get a per-extension subdir.
 
 **Before** (`/Photos/` root):
+
 ```
 IMG_001.jpg  (EXIF: 2026-04-15)
 IMG_001.raf  (EXIF: 2026-04-15)
@@ -223,6 +232,7 @@ VID_001.mp4  (EXIF: 2026-04-15)
 ```
 
 **After**:
+
 ```
 2026 - 04 April/
   2026-04-15/
@@ -241,12 +251,14 @@ VID_001.mp4  (EXIF: 2026-04-15)
 Photos from March 31 and April 1 are never grouped across a month boundary.
 
 **Before** (`/Photos/` root):
+
 ```
 IMG_001.jpg  (EXIF: 2026-03-31)
 IMG_002.jpg  (EXIF: 2026-04-01)
 ```
 
 **After**:
+
 ```
 2026 - 03 March/
   2026-03-31/
@@ -261,6 +273,7 @@ IMG_002.jpg  (EXIF: 2026-04-01)
 ### Scenario 6 — Import mode, merging into a named existing dir
 
 **Existing output** (`/Photos/`):
+
 ```
 2026 - 04 April/
   Hiking Trip/
@@ -271,12 +284,14 @@ IMG_002.jpg  (EXIF: 2026-04-01)
 ```
 
 **Input** (`/Volumes/Camera/`):
+
 ```
 IMG_010.jpg  (EXIF: 2026-04-15)
 IMG_011.raf  (EXIF: 2026-04-16)
 ```
 
 **After** (files moved into the existing named dir):
+
 ```
 2026 - 04 April/
   Hiking Trip/
@@ -295,6 +310,7 @@ IMG_011.raf  (EXIF: 2026-04-16)
 ### Scenario 7 — Import mode, date falls within existing dir's span
 
 **Existing output** (`/Photos/`):
+
 ```
 2026 - 04 April/
   Hiking Trip/
@@ -303,11 +319,13 @@ IMG_011.raf  (EXIF: 2026-04-16)
 ```
 
 **Input**:
+
 ```
 IMG_002.jpg  (EXIF: 2026-04-15)   ← no exact match, but 14th < 15th < 16th
 ```
 
 **After** (photo placed in `Hiking Trip/` because its date falls within the existing span):
+
 ```
 2026 - 04 April/
   Hiking Trip/
@@ -321,6 +339,7 @@ IMG_002.jpg  (EXIF: 2026-04-15)   ← no exact match, but 14th < 15th < 16th
 ### Scenario 8 — Import mode, new photos alongside an existing dir
 
 **Existing output** (`/Photos/`):
+
 ```
 2026 - 04 April/
   Hiking Trip/
@@ -328,6 +347,7 @@ IMG_002.jpg  (EXIF: 2026-04-15)   ← no exact match, but 14th < 15th < 16th
 ```
 
 **Input**:
+
 ```
 IMG_020.jpg  (EXIF: 2026-04-20)
 IMG_021.jpg  (EXIF: 2026-04-21)
@@ -336,6 +356,7 @@ IMG_021.jpg  (EXIF: 2026-04-21)
 No existing dir covers the 20th–21st, so a new range dir is created:
 
 **After**:
+
 ```
 2026 - 04 April/
   Hiking Trip/
@@ -350,6 +371,7 @@ No existing dir covers the 20th–21st, so a new range dir is created:
 ### Scenario 9 — Import mode, duplicate skip
 
 **Existing output** (`/Photos/`):
+
 ```
 2026 - 04 April/
   2026-04-15/
@@ -357,12 +379,14 @@ No existing dir covers the 20th–21st, so a new range dir is created:
 ```
 
 **Input**:
+
 ```
 IMG_001.jpg  (EXIF: 2026-04-15)   ← same name, same date → skip
 IMG_002.jpg  (EXIF: 2026-04-15)   ← same date, different name → import
 ```
 
 **After**:
+
 - `IMG_001.jpg` in input is **left in place** — name and date already present.
 - `IMG_002.jpg` is moved into `2026-04-15/`.
 
@@ -371,6 +395,7 @@ IMG_002.jpg  (EXIF: 2026-04-15)   ← same date, different name → import
 ### Scenario 10 — Import mode, cross-month batch
 
 **Input**:
+
 ```
 IMG_001.jpg  (EXIF: 2026-03-30)
 IMG_002.jpg  (EXIF: 2026-03-31)
@@ -381,6 +406,7 @@ IMG_004.jpg  (EXIF: 2026-04-02)
 The gap from March 31 → April 1 crosses a month boundary, so they produce separate dirs even though they are only 1 day apart:
 
 **After**:
+
 ```
 2026 - 03 March/
   2026-03-30 - 2026-03-31/
