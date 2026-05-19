@@ -90,6 +90,16 @@ pht rate ./photos
 Browse images in a terminal UI, preview the selected image on the right, and press `0`-`5` to
 rename the file with a star suffix such as `fish_★☆☆☆☆.jpg`.
 
+**Import ratings from another directory**
+
+```sh
+pht rate import --from ./edited --to ./originals
+```
+
+This matches files by basename while ignoring both extension and existing rating suffix, so
+`DSCF0655_★☆☆☆☆.webp` in `edited/` will update `DSCF0655.jpg` or `DSCF0655_★★★☆☆.jpg` in
+`originals/` to `DSCF0655_★☆☆☆☆.jpg`.
+
 ## Notes
 
 - Extensions are matched case-insensitively.

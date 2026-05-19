@@ -10,6 +10,7 @@ use ratatui::{
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::{
+    collections::HashMap,
     fs, io,
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
@@ -36,13 +37,50 @@ pub fn subcommand() -> Command {
                 .help("Scan subdirectories recursively")
                 .action(ArgAction::SetTrue),
         )
+        .subcommand(import_subcommand())
 }
 
 pub fn run(matches: &ArgMatches) {
-    if let Err(err) = run_inner(matches) {
+    let result = match matches.subcommand() {
+        Some(("import", sub_matches)) => run_import(sub_matches),
+        _ => run_inner(matches),
+    };
+
+    if let Err(err) = result {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
+}
+
+fn import_subcommand() -> Command {
+    Command::new("import")
+        .about("Import ratings from one file or directory into another")
+        .arg(
+            Arg::new("from_flag")
+                .long("from")
+                .value_name("FROM")
+                .help("Source file or directory that already contains ratings")
+                .conflicts_with("from"),
+        )
+        .arg(
+            Arg::new("to_flag")
+                .long("to")
+                .value_name("TO")
+                .help("Target file or directory to receive ratings")
+                .conflicts_with("to"),
+        )
+        .arg(
+            Arg::new("from")
+                .index(1)
+                .value_name("FROM")
+                .help("Source file or directory that already contains ratings"),
+        )
+        .arg(
+            Arg::new("to")
+                .index(2)
+                .value_name("TO")
+                .help("Target file or directory to receive ratings"),
+        )
 }
 
 fn run_inner(matches: &ArgMatches) -> Result<(), String> {
@@ -422,6 +460,15 @@ impl PreviewMode {
     }
 }
 
+#[derive(Default)]
+struct ImportStats {
+    updated: usize,
+    unchanged: usize,
+    missing_source: usize,
+    source_unrated: usize,
+    failed: usize,
+}
+
 fn collect_entries(root: &Path, recursive: bool) -> Result<Vec<ImageEntry>, String> {
     let mut paths = Vec::new();
 
@@ -453,6 +500,127 @@ fn collect_entries(root: &Path, recursive: bool) -> Result<Vec<ImageEntry>, Stri
         .into_iter()
         .map(|path| ImageEntry::from_path(root, path))
         .collect())
+}
+
+fn run_import(matches: &ArgMatches) -> Result<(), String> {
+    let from = matches
+        .get_one::<String>("from_flag")
+        .or_else(|| matches.get_one::<String>("from"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "missing --from/ FROM argument".to_string())?;
+    let to = matches
+        .get_one::<String>("to_flag")
+        .or_else(|| matches.get_one::<String>("to"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "missing --to/ TO argument".to_string())?;
+
+    let source_files = collect_import_paths(&from)?;
+    if source_files.is_empty() {
+        return Err(format!("No image files found in {}", from.display()));
+    }
+
+    let target_files = collect_import_paths(&to)?;
+    if target_files.is_empty() {
+        return Err(format!("No image files found in {}", to.display()));
+    }
+
+    let (rating_index, unrated_source_count) = build_rating_index(&source_files);
+    let mut stats = ImportStats::default();
+
+    for target_path in target_files {
+        let entry = image_entry_for_path(target_path.clone());
+        let key = normalized_name_key(&entry.original_stem);
+
+        let Some(source_rating) = rating_index.get(&key).copied() else {
+            stats.missing_source += 1;
+            continue;
+        };
+
+        if entry.rating == Some(source_rating) {
+            stats.unchanged += 1;
+            continue;
+        }
+
+        match rename_with_rating(&entry, source_rating) {
+            Ok(_) => stats.updated += 1,
+            Err(err) => {
+                stats.failed += 1;
+                eprintln!("{err}");
+            }
+        }
+    }
+
+    stats.source_unrated = unrated_source_count;
+
+    println!(
+        "Imported ratings: {} updated, {} unchanged, {} without source match, {} unrated sources ignored, {} failed",
+        stats.updated, stats.unchanged, stats.missing_source, stats.source_unrated, stats.failed
+    );
+
+    Ok(())
+}
+
+fn collect_import_paths(path: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut result = Vec::new();
+
+    if path.is_file() {
+        if preview::is_supported_image(path) {
+            result.push(path.to_path_buf());
+        }
+        return Ok(result);
+    }
+
+    if !path.is_dir() {
+        return Err(format!("{} is not a file or directory", path.display()));
+    }
+
+    let entries = fs::read_dir(path)
+        .map_err(|e| format!("Failed to read directory {}: {}", path.display(), e))?;
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if child.is_file() && preview::is_supported_image(&child) {
+            result.push(child);
+        }
+    }
+
+    result.sort_by(|a, b| {
+        a.to_string_lossy()
+            .to_lowercase()
+            .cmp(&b.to_string_lossy().to_lowercase())
+    });
+
+    Ok(result)
+}
+
+fn build_rating_index(paths: &[PathBuf]) -> (HashMap<String, u8>, usize) {
+    let mut index = HashMap::new();
+    let mut unrated = 0;
+
+    for path in paths {
+        let entry = image_entry_for_path(path.clone());
+        let Some(rating) = entry.rating else {
+            unrated += 1;
+            continue;
+        };
+
+        index
+            .entry(normalized_name_key(&entry.original_stem))
+            .or_insert(rating);
+    }
+
+    (index, unrated)
+}
+
+fn image_entry_for_path(path: PathBuf) -> ImageEntry {
+    let root = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    ImageEntry::from_path(&root, path)
+}
+
+fn normalized_name_key(name: &str) -> String {
+    name.to_lowercase()
 }
 
 fn rename_with_rating(entry: &ImageEntry, rating: u8) -> Result<PathBuf, String> {
@@ -775,6 +943,8 @@ fn rgb_to_256_color(r: u8, g: u8, b: u8) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parses_rated_stems() {
@@ -812,5 +982,71 @@ mod tests {
             "fish_★★★★★.jpg"
         );
         assert_eq!(build_rated_file_name("fish", None, 0), "fish_☆☆☆☆☆");
+    }
+
+    #[test]
+    fn imports_rating_across_extensions() {
+        let temp_root = temp_test_dir("import-cross-ext");
+        let from_dir = temp_root.join("from");
+        let to_dir = temp_root.join("to");
+        fs::create_dir_all(&from_dir).expect("create from dir");
+        fs::create_dir_all(&to_dir).expect("create to dir");
+
+        let source = from_dir.join("DSCF0655_★☆☆☆☆.webp");
+        let target = to_dir.join("DSCF0655.jpg");
+        fs::write(&source, b"source").expect("write source");
+        fs::write(&target, b"target").expect("write target");
+
+        let (rating_index, _) =
+            build_rating_index(&collect_import_paths(&from_dir).expect("collect source paths"));
+        let entry = image_entry_for_path(target.clone());
+        let rating = rating_index
+            .get(&normalized_name_key(&entry.original_stem))
+            .copied()
+            .expect("rating should exist");
+
+        rename_with_rating(&entry, rating).expect("rename target");
+
+        assert!(!target.exists());
+        assert!(to_dir.join("DSCF0655_★☆☆☆☆.jpg").exists());
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn imports_rating_over_existing_target_rating() {
+        let temp_root = temp_test_dir("import-overwrite-rating");
+        let from_dir = temp_root.join("from");
+        let to_dir = temp_root.join("to");
+        fs::create_dir_all(&from_dir).expect("create from dir");
+        fs::create_dir_all(&to_dir).expect("create to dir");
+
+        let source = from_dir.join("DSCF0655_★☆☆☆☆.webp");
+        let target = to_dir.join("DSCF0655_★★★☆☆.jpg");
+        fs::write(&source, b"source").expect("write source");
+        fs::write(&target, b"target").expect("write target");
+
+        let (rating_index, _) =
+            build_rating_index(&collect_import_paths(&from_dir).expect("collect source paths"));
+        let entry = image_entry_for_path(target.clone());
+        let rating = rating_index
+            .get(&normalized_name_key(&entry.original_stem))
+            .copied()
+            .expect("rating should exist");
+
+        rename_with_rating(&entry, rating).expect("rename target");
+
+        assert!(!target.exists());
+        assert!(to_dir.join("DSCF0655_★☆☆☆☆.jpg").exists());
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    fn temp_test_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("photool-rate-{label}-{}-{nanos}", process::id()))
     }
 }
