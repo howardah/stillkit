@@ -100,6 +100,14 @@ This matches files by basename while ignoring both extension and existing rating
 `DSCF0655_★☆☆☆☆.webp` in `edited/` will update `DSCF0655.jpg` or `DSCF0655_★★★☆☆.jpg` in
 `originals/` to `DSCF0655_★☆☆☆☆.jpg`.
 
+**Generate full-size previews**
+
+```sh
+pht preview ./photos --full
+```
+
+This keeps the original image dimensions and only converts into the selected preview format.
+
 ## Notes
 
 - Extensions are matched case-insensitively.

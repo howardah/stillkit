@@ -51,6 +51,7 @@ struct PreviewConfig {
     max_dimension: u32,
     format: OutputFormat,
     recursive: bool,
+    full: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,7 +62,7 @@ enum ExistingFileAction {
 
 pub fn subcommand() -> Command {
     Command::new("preview")
-        .about("Generate preview images with a maximum dimension")
+        .about("Generate preview images")
         .arg(
             Arg::new("input")
                 .help("Input directory to process (defaults to current directory)")
@@ -99,6 +100,12 @@ pub fn subcommand() -> Command {
                 .help("Process subdirectories recursively")
                 .action(ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("full")
+                .long("full")
+                .help("Keep original dimensions and skip resizing")
+                .action(ArgAction::SetTrue),
+        )
 }
 
 pub fn run(matches: &clap::ArgMatches) {
@@ -134,6 +141,7 @@ pub fn run(matches: &clap::ArgMatches) {
     let format = OutputFormat::from_str(format_str).unwrap_or(OutputFormat::Jpeg);
 
     let recursive = matches.get_flag("recursive");
+    let full = matches.get_flag("full");
 
     let config = PreviewConfig {
         input_dir: input_dir.to_path_buf(),
@@ -141,6 +149,7 @@ pub fn run(matches: &clap::ArgMatches) {
         max_dimension,
         format,
         recursive,
+        full,
     };
 
     if is_single_file {
@@ -166,8 +175,8 @@ pub fn run(matches: &clap::ArgMatches) {
             .ok();
 
         println!(
-            "Generating preview: max dimension: {}, format: {}, output: {}",
-            config.max_dimension,
+            "Generating preview: {}, format: {}, output: {}",
+            preview_size_label(config.max_dimension, config.full),
             config.format.extension(),
             output_path.display()
         );
@@ -196,6 +205,7 @@ pub fn run(matches: &clap::ArgMatches) {
             &output_path,
             config.max_dimension,
             config.format,
+            config.full,
         ) {
             Ok(_) => {
                 progress.inc(1);
@@ -257,9 +267,9 @@ fn generate_previews(config: &PreviewConfig) {
     }
 
     println!(
-        "Generating previews: {} images, max dimension: {}, format: {}, output: {}",
+        "Generating previews: {} images, {}, format: {}, output: {}",
         image_paths.len(),
-        config.max_dimension,
+        preview_size_label(config.max_dimension, config.full),
         config.format.extension(),
         config.output_dir.display()
     );
@@ -299,9 +309,14 @@ fn generate_previews(config: &PreviewConfig) {
                 // Change extension to output format
                 output_path = output_path.with_extension(config.format.extension());
 
-                let result =
-                    do_generate_preview(path, &output_path, config.max_dimension, config.format)
-                        .map(|_| output_path);
+                let result = do_generate_preview(
+                    path,
+                    &output_path,
+                    config.max_dimension,
+                    config.format,
+                    config.full,
+                )
+                .map(|_| output_path);
                 progress.inc(1);
                 result
             },
@@ -430,6 +445,7 @@ fn do_generate_preview(
     output_path: &Path,
     max_dimension: u32,
     format: OutputFormat,
+    full: bool,
 ) -> Result<(), String> {
     // HEIC/HEIF needs the dedicated decoder path.
     let is_heic = input_path
@@ -438,21 +454,27 @@ fn do_generate_preview(
         .map(|e| matches!(e.to_ascii_lowercase().as_str(), "heic" | "heif"))
         .unwrap_or(false);
 
-    if is_heic && try_generate_heic_preview_with_magick(input_path, output_path, max_dimension)? {
+    if is_heic
+        && try_generate_heic_preview_with_magick(input_path, output_path, max_dimension, full)?
+    {
         return Ok(());
     }
 
     let img = load_image(input_path)?;
 
-    // Calculate new dimensions maintaining aspect ratio
-    let (width, height) = img.dimensions();
-    let (new_width, new_height) = calculate_dimensions(width, height, max_dimension);
-
-    // Resize if needed
-    let resized: DynamicImage = if new_width < width || new_height < height {
-        img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
-    } else {
+    let resized: DynamicImage = if full {
         img
+    } else {
+        // Calculate new dimensions maintaining aspect ratio
+        let (width, height) = img.dimensions();
+        let (new_width, new_height) = calculate_dimensions(width, height, max_dimension);
+
+        // Resize if needed
+        if new_width < width || new_height < height {
+            img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
+        } else {
+            img
+        }
     };
 
     // Save with the specified format
@@ -519,15 +541,18 @@ fn try_generate_heic_preview_with_magick(
     input_path: &Path,
     output_path: &Path,
     max_dimension: u32,
+    full: bool,
 ) -> Result<bool, String> {
-    let output = match ProcessCommand::new("magick")
-        .arg(input_path)
-        .arg("-auto-orient")
-        .arg("-resize")
-        .arg(format!("{max_dimension}x{max_dimension}>"))
-        .arg(output_path)
-        .output()
-    {
+    let mut command = ProcessCommand::new("magick");
+    command.arg(input_path).arg("-auto-orient");
+
+    if !full {
+        command
+            .arg("-resize")
+            .arg(format!("{max_dimension}x{max_dimension}>"));
+    }
+
+    let output = match command.arg(output_path).output() {
         Ok(output) => output,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => {
@@ -549,6 +574,14 @@ fn try_generate_heic_preview_with_magick(
         input_path.display(),
         stderr.trim()
     ))
+}
+
+fn preview_size_label(max_dimension: u32, full: bool) -> String {
+    if full {
+        "full size".to_string()
+    } else {
+        format!("max dimension: {max_dimension}")
+    }
 }
 
 /// Load a HEIC image using the heic crate
@@ -632,7 +665,7 @@ mod tests {
             std::env::temp_dir().join(format!("photool-preview-heic-{}.jpg", process::id()));
         let _ = fs::remove_file(&output_path);
 
-        try_generate_heic_preview_with_magick(&path, &output_path, 1000)
+        try_generate_heic_preview_with_magick(&path, &output_path, 1000, false)
             .expect("ImageMagick HEIC preview should succeed");
 
         let image = image::open(&output_path).expect("generated preview should be readable");
@@ -656,6 +689,29 @@ mod tests {
             average < 220.0,
             "decoded HEIC output is unexpectedly blown out: {average}"
         );
+
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn preview_size_label_reflects_full_mode() {
+        assert_eq!(preview_size_label(1000, false), "max dimension: 1000");
+        assert_eq!(preview_size_label(1000, true), "full size");
+    }
+
+    #[test]
+    fn full_mode_keeps_original_dimensions() {
+        let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg");
+        let source = image::open(&input_path).expect("reference image should be readable");
+        let output_path =
+            std::env::temp_dir().join(format!("photool-preview-full-{}.png", process::id()));
+        let _ = fs::remove_file(&output_path);
+
+        do_generate_preview(&input_path, &output_path, 10, OutputFormat::Png, true)
+            .expect("full preview generation should succeed");
+
+        let output = image::open(&output_path).expect("generated image should be readable");
+        assert_eq!(output.dimensions(), source.dimensions());
 
         let _ = fs::remove_file(output_path);
     }
