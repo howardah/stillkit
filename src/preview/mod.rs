@@ -3,7 +3,7 @@ use image::{DynamicImage, GenericImageView, ImageFormat};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::fs;
-use std::io::Cursor;
+use std::io::{self, Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::time::Duration;
@@ -51,6 +51,12 @@ struct PreviewConfig {
     max_dimension: u32,
     format: OutputFormat,
     recursive: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExistingFileAction {
+    Overwrite,
+    Skip,
 }
 
 pub fn subcommand() -> Command {
@@ -176,6 +182,15 @@ pub fn run(matches: &clap::ArgMatches) {
         );
         progress.set_message("Generating preview");
 
+        if output_path.exists()
+            && matches!(prompt_existing_file_action(1), ExistingFileAction::Skip)
+        {
+            progress.inc(1);
+            progress.finish_with_message("Skipped existing preview");
+            println!("Skipped existing file: {}", output_path.display());
+            return;
+        }
+
         match do_generate_preview(
             &input_file,
             &output_path,
@@ -204,6 +219,40 @@ fn generate_previews(config: &PreviewConfig) {
 
     if image_paths.is_empty() {
         println!("No image files found in {}.", config.input_dir.display());
+        return;
+    }
+
+    let existing_outputs = image_paths
+        .iter()
+        .filter(|path| preview_output_path(config, path).exists())
+        .count();
+
+    let existing_file_action = if existing_outputs > 0 {
+        prompt_existing_file_action(existing_outputs)
+    } else {
+        ExistingFileAction::Overwrite
+    };
+
+    let image_paths: Vec<PathBuf> = if existing_file_action == ExistingFileAction::Skip {
+        image_paths
+            .into_iter()
+            .filter(|path| !preview_output_path(config, path).exists())
+            .collect()
+    } else {
+        image_paths
+    };
+
+    let skipped_count = if existing_file_action == ExistingFileAction::Skip {
+        existing_outputs
+    } else {
+        0
+    };
+
+    if image_paths.is_empty() {
+        println!(
+            "All {} previews already exist. Skipping generation.",
+            skipped_count
+        );
         return;
     }
 
@@ -269,16 +318,72 @@ fn generate_previews(config: &PreviewConfig) {
 
     let success_count = image_paths.len() - error_count;
 
-    progress.finish_with_message(format!(
-        "Generated {} previews ({} errors)",
-        success_count, error_count
-    ));
+    let summary = if skipped_count > 0 {
+        format!(
+            "Generated {} previews ({} skipped, {} errors)",
+            success_count, skipped_count, error_count
+        )
+    } else {
+        format!(
+            "Generated {} previews ({} errors)",
+            success_count, error_count
+        )
+    };
+    progress.finish_with_message(summary);
 
     if error_count > 0 {
         eprintln!(
             "Encountered {} errors during preview generation.",
             error_count
         );
+    }
+}
+
+fn preview_output_path(config: &PreviewConfig, input_path: &Path) -> PathBuf {
+    let relative_path = input_path
+        .strip_prefix(&config.input_dir)
+        .unwrap_or(input_path);
+    config
+        .output_dir
+        .join(relative_path)
+        .with_extension(config.format.extension())
+}
+
+fn prompt_existing_file_action(existing_count: usize) -> ExistingFileAction {
+    let noun = if existing_count == 1 {
+        "preview"
+    } else {
+        "previews"
+    };
+
+    loop {
+        print!(
+            "{} existing {} detected. Overwrite existing files or skip them? [o/s] ",
+            existing_count, noun
+        );
+        let _ = io::stdout().flush();
+
+        let mut input = String::new();
+        match io::stdin().read_line(&mut input) {
+            Ok(_) => match parse_existing_file_action_input(&input) {
+                Some(action) => return action,
+                None => {
+                    eprintln!("Please enter 'o' to overwrite or 's' to skip.");
+                }
+            },
+            Err(e) => {
+                eprintln!("Failed to read input: {}. Skipping existing files.", e);
+                return ExistingFileAction::Skip;
+            }
+        }
+    }
+}
+
+fn parse_existing_file_action_input(input: &str) -> Option<ExistingFileAction> {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "o" | "overwrite" => Some(ExistingFileAction::Overwrite),
+        "s" | "skip" | "" => Some(ExistingFileAction::Skip),
+        _ => None,
     }
 }
 
@@ -469,6 +574,27 @@ fn calculate_dimensions(width: u32, height: u32, max_dimension: u32) -> (u32, u3
 mod tests {
     use super::*;
     use std::process;
+
+    #[test]
+    fn parses_existing_file_action_input() {
+        assert_eq!(
+            parse_existing_file_action_input("o"),
+            Some(ExistingFileAction::Overwrite)
+        );
+        assert_eq!(
+            parse_existing_file_action_input("overwrite"),
+            Some(ExistingFileAction::Overwrite)
+        );
+        assert_eq!(
+            parse_existing_file_action_input("s"),
+            Some(ExistingFileAction::Skip)
+        );
+        assert_eq!(
+            parse_existing_file_action_input(""),
+            Some(ExistingFileAction::Skip)
+        );
+        assert_eq!(parse_existing_file_action_input("later"), None);
+    }
 
     #[test]
     fn previews_heic_without_whiteout_when_magick_is_available() {
