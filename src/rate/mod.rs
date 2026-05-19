@@ -1,22 +1,24 @@
 use crate::preview;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use crossterm::event::{self, KeyCode};
-use image::Rgba;
+use image::DynamicImage;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    process::Command as ProcessCommand,
 };
 
 const FILLED_STAR: char = '★';
 const EMPTY_STAR: char = '☆';
 const MAX_RATING: u8 = 5;
+const ASCII_RAMP: &[u8] = b" .,:;irsXA253hMHGS#9B&@";
 
 pub fn subcommand() -> Command {
     Command::new("rate")
@@ -120,18 +122,34 @@ impl App {
     }
 
     fn render_list(&mut self, frame: &mut Frame, area: Rect) {
+        let block = panel_block("Images");
+        let inner = block.inner(area);
+        frame.render_widget(Clear, area);
+        frame.render_widget(block, area);
+
         let items: Vec<ListItem> = self
             .entries
             .iter()
-            .map(|entry| ListItem::new(entry.display_path.as_str()))
+            .map(|entry| {
+                ListItem::new(Line::from(vec![
+                    Span::raw(entry.display_path.clone()),
+                    Span::styled(
+                        entry
+                            .rating
+                            .map(|rating| format!("  {}", rating_to_stars(rating)))
+                            .unwrap_or_default(),
+                        Style::new().fg(Color::DarkGray),
+                    ),
+                ]))
+            })
             .collect();
         let list = List::new(items)
-            .block(Block::bordered().title("Images"))
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
             .highlight_symbol(">> ")
             .scroll_padding(2);
 
-        frame.render_stateful_widget(list, area, &mut self.list_state);
+        frame.render_widget(Clear, inner);
+        frame.render_stateful_widget(list, inner, &mut self.list_state);
     }
 
     fn render_detail(&mut self, frame: &mut Frame, area: Rect) {
@@ -153,47 +171,49 @@ impl App {
         };
 
         let title = Line::from(display_title.clone()).centered();
-        let block = Block::bordered()
+        let block = panel_block("")
             .title_top(title)
             .title_bottom(Line::from(stars).centered());
         let inner = block.inner(preview_area);
+        frame.render_widget(Clear, preview_area);
         frame.render_widget(block, preview_area);
 
         self.ensure_preview(inner);
 
         let preview = match &self.preview {
-            Some(cache) if cache.error.is_none() => {
-                Paragraph::new(cache.lines.clone()).block(Block::new())
-            }
+            Some(cache) if cache.error.is_none() => Paragraph::new(cache.lines.clone())
+                .block(Block::new()),
             Some(cache) => Paragraph::new(cache.error.clone().unwrap_or_default())
-                .style(Style::new().yellow())
+                .style(Style::new().fg(Color::Yellow))
                 .centered(),
             None => Paragraph::new(""),
         };
+        frame.render_widget(Clear, inner);
         frame.render_widget(preview, inner);
 
         let info_lines = vec![
             Line::from(vec![
-                Span::from("Shown as: ").bold(),
-                Span::from(display_title),
+                Span::styled("Shown as: ", Style::new().add_modifier(Modifier::BOLD)),
+                Span::raw(display_title),
             ]),
             Line::from(vec![
-                Span::from("On disk: ").bold(),
-                Span::from(disk_name),
+                Span::styled("On disk: ", Style::new().add_modifier(Modifier::BOLD)),
+                Span::raw(disk_name),
             ]),
             Line::from(vec![
-                Span::from("Directory: ").bold(),
-                Span::from(self.root.display().to_string()),
+                Span::styled("Directory: ", Style::new().add_modifier(Modifier::BOLD)),
+                Span::styled(self.root.display().to_string(), Style::new().fg(Color::DarkGray)),
             ]),
             Line::from(vec![
-                Span::from("Keys: ").bold(),
-                Span::from("0-5 rate, q quit"),
+                Span::styled("Keys: ", Style::new().add_modifier(Modifier::BOLD)),
+                Span::styled("0-5 rate, q quit", Style::new().fg(Color::DarkGray)),
             ]),
         ];
 
+        frame.render_widget(Clear, info_area);
         frame.render_widget(
             Paragraph::new(Text::from(info_lines))
-                .block(Block::bordered().title("Details"))
+                .block(panel_block("Details"))
                 .wrap(Wrap { trim: true }),
             info_area,
         );
@@ -201,15 +221,22 @@ impl App {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let footer = vec![
-            Line::from("Navigate with arrows or j/k. Home/End jump. PageUp/PageDown move faster."),
-            Line::from(self.status.clone().unwrap_or_else(|| {
-                "Press 0-5 to apply or update the current rating.".to_string()
-            })),
+            Line::from(Span::styled(
+                "Navigate with arrows or j/k. Home/End jump. PageUp/PageDown move faster.",
+                Style::new().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                self.status.clone().unwrap_or_else(|| {
+                    "Press 0-5 to apply or update the current rating.".to_string()
+                }),
+                Style::new(),
+            )),
         ];
 
+        frame.render_widget(Clear, area);
         frame.render_widget(
             Paragraph::new(Text::from(footer))
-                .block(Block::bordered().title("Status"))
+                .block(panel_block("Status"))
                 .wrap(Wrap { trim: true }),
             area,
         );
@@ -411,7 +438,7 @@ fn render_preview(path: &Path, area: Rect) -> PreviewCache {
         return cache;
     }
 
-    match preview::load_image(path) {
+    match load_preview_image(path, area.width, area.height) {
         Ok(image) => {
             cache.lines = image_to_lines(&image, area.width, area.height);
         }
@@ -423,62 +450,104 @@ fn render_preview(path: &Path, area: Rect) -> PreviewCache {
     cache
 }
 
+fn load_preview_image(path: &Path, max_width: u16, max_height: u16) -> Result<DynamicImage, String> {
+    let pixel_width = max_width.max(1) as u32;
+    let pixel_height = (max_height.max(1) as u32).saturating_mul(2);
+
+    match load_image_with_magick(path, pixel_width, pixel_height) {
+        Ok(Some(image)) => Ok(image),
+        Ok(None) => preview::load_image(path),
+        Err(magick_err) => preview::load_image(path).map_err(|fallback_err| {
+            format!("{magick_err}\nFallback decoder also failed: {fallback_err}")
+        }),
+    }
+}
+
+fn load_image_with_magick(
+    path: &Path,
+    pixel_width: u32,
+    pixel_height: u32,
+) -> Result<Option<DynamicImage>, String> {
+    let output = match ProcessCommand::new("magick")
+        .arg(path)
+        .arg("-auto-orient")
+        .arg("-thumbnail")
+        .arg(format!("{pixel_width}x{pixel_height}>"))
+        .arg("-colorspace")
+        .arg("sRGB")
+        .arg("png:-")
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "Failed to launch ImageMagick for {}: {}",
+                path.display(),
+                err
+            ));
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "ImageMagick failed to render {}: {}",
+            path.display(),
+            stderr.trim()
+        ));
+    }
+
+    image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
+        .map(Some)
+        .map_err(|e| format!("Failed to decode ImageMagick output for {}: {}", path.display(), e))
+}
+
 fn image_to_lines(image: &image::DynamicImage, max_width: u16, max_height: u16) -> Vec<Line<'static>> {
     let pixel_height = (max_height as u32).saturating_mul(2).max(1);
     let resized = image.thumbnail(max_width.max(1) as u32, pixel_height);
-    let rgba = resized.to_rgba8();
-    let (width, height) = rgba.dimensions();
+    let gray = resized.to_luma8();
+    let (width, height) = gray.dimensions();
 
     let row_count = height.div_ceil(2) as usize;
     let horizontal_padding = max_width.saturating_sub(width as u16) as usize / 2;
     let vertical_padding = max_height.saturating_sub(row_count as u16) as usize / 2;
+    let blank_line = " ".repeat(max_width as usize);
 
     let mut lines = Vec::with_capacity(max_height as usize);
     for _ in 0..vertical_padding {
-        lines.push(Line::from(""));
+        lines.push(Line::from(blank_line.clone()));
     }
 
     for y in (0..height).step_by(2) {
-        let mut spans = Vec::with_capacity(width as usize + usize::from(horizontal_padding > 0));
+        let mut text = String::with_capacity(max_width as usize);
         if horizontal_padding > 0 {
-            spans.push(Span::raw(" ".repeat(horizontal_padding)));
+            text.push_str(&" ".repeat(horizontal_padding));
         }
 
         for x in 0..width {
-            let top = rgba.get_pixel(x, y);
+            let top = u16::from(gray.get_pixel(x, y)[0]);
             let bottom = if y + 1 < height {
-                rgba.get_pixel(x, y + 1)
+                u16::from(gray.get_pixel(x, y + 1)[0])
             } else {
-                &Rgba([0, 0, 0, 255])
+                top
             };
-
-            spans.push(Span::styled(
-                "▀",
-                Style::new()
-                    .fg(rgba_to_color(top))
-                    .bg(rgba_to_color(bottom)),
-            ));
+            let average = ((top + bottom) / 2) as u8;
+            text.push(map_intensity_to_char(average));
         }
 
-        lines.push(Line::from(spans));
+        let used_width = horizontal_padding + width as usize;
+        if used_width < max_width as usize {
+            text.push_str(&" ".repeat(max_width as usize - used_width));
+        }
+        lines.push(Line::from(text));
     }
 
     while lines.len() < max_height as usize {
-        lines.push(Line::from(""));
+        lines.push(Line::from(blank_line.clone()));
     }
 
     lines
-}
-
-fn rgba_to_color(pixel: &Rgba<u8>) -> Color {
-    let [r, g, b, a] = pixel.0;
-    if a == 255 {
-        return Color::Rgb(r, g, b);
-    }
-
-    let alpha = u16::from(a);
-    let blend = |channel: u8| -> u8 { ((u16::from(channel) * alpha) / 255) as u8 };
-    Color::Rgb(blend(r), blend(g), blend(b))
 }
 
 fn split_file_name(file_name: &str) -> (String, Option<String>) {
@@ -537,6 +606,17 @@ fn rating_to_stars(rating: u8) -> String {
             .to_string()
             .repeat((MAX_RATING - rating) as usize)
     )
+}
+
+fn panel_block<'a>(title: &'a str) -> Block<'a> {
+    Block::bordered()
+        .title(title)
+        .title_style(Style::new().add_modifier(Modifier::BOLD))
+}
+
+fn map_intensity_to_char(intensity: u8) -> char {
+    let index = (usize::from(intensity) * (ASCII_RAMP.len() - 1)) / 255;
+    ASCII_RAMP[index] as char
 }
 
 #[cfg(test)]
