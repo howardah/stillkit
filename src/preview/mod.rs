@@ -52,6 +52,7 @@ struct PreviewConfig {
     format: OutputFormat,
     recursive: bool,
     full: bool,
+    clear_metadata: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +107,12 @@ pub fn subcommand() -> Command {
                 .help("Keep original dimensions and skip resizing")
                 .action(ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("clear_metadata")
+                .long("clear-metadata")
+                .help("Strip EXIF/XMP/IPTC metadata from generated previews")
+                .action(ArgAction::SetTrue),
+        )
 }
 
 pub fn run(matches: &clap::ArgMatches) {
@@ -142,6 +149,7 @@ pub fn run(matches: &clap::ArgMatches) {
 
     let recursive = matches.get_flag("recursive");
     let full = matches.get_flag("full");
+    let clear_metadata = matches.get_flag("clear_metadata");
 
     let config = PreviewConfig {
         input_dir: input_dir.to_path_buf(),
@@ -150,6 +158,7 @@ pub fn run(matches: &clap::ArgMatches) {
         format,
         recursive,
         full,
+        clear_metadata,
     };
 
     if is_single_file {
@@ -206,6 +215,7 @@ pub fn run(matches: &clap::ArgMatches) {
             config.max_dimension,
             config.format,
             config.full,
+            config.clear_metadata,
         ) {
             Ok(_) => {
                 progress.inc(1);
@@ -315,6 +325,7 @@ fn generate_previews(config: &PreviewConfig) {
                     config.max_dimension,
                     config.format,
                     config.full,
+                    config.clear_metadata,
                 )
                 .map(|_| output_path);
                 progress.inc(1);
@@ -446,18 +457,23 @@ fn do_generate_preview(
     max_dimension: u32,
     format: OutputFormat,
     full: bool,
+    clear_metadata: bool,
 ) -> Result<(), String> {
-    // HEIC/HEIF needs the dedicated decoder path.
-    let is_heic = input_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "heic" | "heif"))
-        .unwrap_or(false);
-
-    if is_heic
-        && try_generate_heic_preview_with_magick(input_path, output_path, max_dimension, full)?
-    {
+    if try_generate_preview_with_magick(
+        input_path,
+        output_path,
+        max_dimension,
+        full,
+        clear_metadata,
+    )? {
         return Ok(());
+    }
+
+    if !clear_metadata {
+        return Err(format!(
+            "ImageMagick is required to preserve metadata for {}. Install `magick` or rerun with --clear-metadata.",
+            input_path.display()
+        ));
     }
 
     let img = load_image(input_path)?;
@@ -537,14 +553,19 @@ pub(crate) fn load_image(path: &Path) -> Result<DynamicImage, String> {
     }
 }
 
-fn try_generate_heic_preview_with_magick(
+fn try_generate_preview_with_magick(
     input_path: &Path,
     output_path: &Path,
     max_dimension: u32,
     full: bool,
+    clear_metadata: bool,
 ) -> Result<bool, String> {
     let mut command = ProcessCommand::new("magick");
     command.arg(input_path).arg("-auto-orient");
+
+    if clear_metadata {
+        command.arg("-strip");
+    }
 
     if !full {
         command
@@ -629,6 +650,29 @@ mod tests {
     use super::*;
     use std::process;
 
+    fn magick_available() -> bool {
+        ProcessCommand::new("magick")
+            .arg("-version")
+            .output()
+            .is_ok()
+    }
+
+    fn identify_verbose(path: &Path) -> String {
+        let output = ProcessCommand::new("identify")
+            .arg("-verbose")
+            .arg(path)
+            .output()
+            .expect("identify should run");
+
+        assert!(
+            output.status.success(),
+            "identify should succeed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        String::from_utf8(output.stdout).expect("identify output should be valid utf-8")
+    }
+
     #[test]
     fn parses_existing_file_action_input() {
         assert_eq!(
@@ -652,11 +696,7 @@ mod tests {
 
     #[test]
     fn previews_heic_without_whiteout_when_magick_is_available() {
-        if ProcessCommand::new("magick")
-            .arg("-version")
-            .output()
-            .is_err()
-        {
+        if !magick_available() {
             return;
         }
 
@@ -665,7 +705,7 @@ mod tests {
             std::env::temp_dir().join(format!("photool-preview-heic-{}.jpg", process::id()));
         let _ = fs::remove_file(&output_path);
 
-        try_generate_heic_preview_with_magick(&path, &output_path, 1000, false)
+        try_generate_preview_with_magick(&path, &output_path, 1000, false, false)
             .expect("ImageMagick HEIC preview should succeed");
 
         let image = image::open(&output_path).expect("generated preview should be readable");
@@ -707,11 +747,85 @@ mod tests {
             std::env::temp_dir().join(format!("photool-preview-full-{}.png", process::id()));
         let _ = fs::remove_file(&output_path);
 
-        do_generate_preview(&input_path, &output_path, 10, OutputFormat::Png, true)
+        do_generate_preview(&input_path, &output_path, 10, OutputFormat::Png, true, true)
             .expect("full preview generation should succeed");
 
         let output = image::open(&output_path).expect("generated image should be readable");
         assert_eq!(output.dimensions(), source.dimensions());
+
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn preserves_metadata_by_default_when_magick_is_available() {
+        if !magick_available() {
+            return;
+        }
+
+        let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg");
+        let output_path =
+            std::env::temp_dir().join(format!("photool-preview-meta-{}.jpg", process::id()));
+        let _ = fs::remove_file(&output_path);
+
+        do_generate_preview(
+            &input_path,
+            &output_path,
+            10,
+            OutputFormat::Jpeg,
+            false,
+            false,
+        )
+        .expect("metadata-preserving preview generation should succeed");
+
+        let report = identify_verbose(&output_path);
+        assert!(report.contains("Profile-exif:"), "missing EXIF profile");
+        assert!(report.contains("Profile-xmp:"), "missing XMP profile");
+        assert!(
+            report.contains("exif:Artist:"),
+            "missing EXIF artist metadata"
+        );
+        assert!(
+            report.contains("xmp:Rating:"),
+            "missing XMP rating metadata"
+        );
+        assert!(report.contains("Filesize:"), "missing filesize metadata");
+
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn clear_metadata_strips_profiles_when_magick_is_available() {
+        if !magick_available() {
+            return;
+        }
+
+        let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg");
+        let output_path =
+            std::env::temp_dir().join(format!("photool-preview-clear-meta-{}.jpg", process::id()));
+        let _ = fs::remove_file(&output_path);
+
+        do_generate_preview(
+            &input_path,
+            &output_path,
+            10,
+            OutputFormat::Jpeg,
+            false,
+            true,
+        )
+        .expect("metadata-cleared preview generation should succeed");
+
+        let report = identify_verbose(&output_path);
+        assert!(!report.contains("Profile-exif:"), "unexpected EXIF profile");
+        assert!(!report.contains("Profile-xmp:"), "unexpected XMP profile");
+        assert!(
+            !report.contains("exif:Artist:"),
+            "unexpected EXIF artist metadata"
+        );
+        assert!(
+            !report.contains("xmp:Rating:"),
+            "unexpected XMP rating metadata"
+        );
+        assert!(report.contains("Filesize:"), "missing filesize metadata");
 
         let _ = fs::remove_file(output_path);
     }
