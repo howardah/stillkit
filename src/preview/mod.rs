@@ -459,53 +459,12 @@ fn do_generate_preview(
     full: bool,
     clear_metadata: bool,
 ) -> Result<(), String> {
-    if try_generate_preview_with_magick(
-        input_path,
-        output_path,
-        max_dimension,
-        full,
-        clear_metadata,
-    )? {
-        return Ok(());
-    }
+    let orientation_normalized =
+        generate_preview_image(input_path, output_path, max_dimension, format, full)?;
 
     if !clear_metadata {
-        return Err(format!(
-            "ImageMagick is required to preserve metadata for {}. Install `magick` or rerun with --clear-metadata.",
-            input_path.display()
-        ));
+        copy_metadata_with_exiftool(input_path, output_path, orientation_normalized)?;
     }
-
-    let img = load_image(input_path)?;
-
-    let resized: DynamicImage = if full {
-        img
-    } else {
-        // Calculate new dimensions maintaining aspect ratio
-        let (width, height) = img.dimensions();
-        let (new_width, new_height) = calculate_dimensions(width, height, max_dimension);
-
-        // Resize if needed
-        if new_width < width || new_height < height {
-            img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
-        } else {
-            img
-        }
-    };
-
-    // Save with the specified format
-    let mut bytes = Vec::new();
-    resized
-        .write_to(&mut Cursor::new(&mut bytes), format.to_format())
-        .map_err(|e| format!("Failed to encode image {}: {}", input_path.display(), e))?;
-
-    fs::write(output_path, &bytes).map_err(|e| {
-        format!(
-            "Failed to write output file {}: {}",
-            output_path.display(),
-            e
-        )
-    })?;
 
     Ok(())
 }
@@ -553,19 +512,65 @@ pub(crate) fn load_image(path: &Path) -> Result<DynamicImage, String> {
     }
 }
 
-fn try_generate_preview_with_magick(
+fn generate_preview_image(
+    input_path: &Path,
+    output_path: &Path,
+    max_dimension: u32,
+    format: OutputFormat,
+    full: bool,
+) -> Result<bool, String> {
+    // HEIC/HEIF benefits from ImageMagick's decoder and auto-orientation when available.
+    let is_heic = input_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "heic" | "heif"))
+        .unwrap_or(false);
+
+    if is_heic
+        && try_generate_heic_preview_with_magick(input_path, output_path, max_dimension, full)?
+    {
+        return Ok(true);
+    }
+
+    let img = load_image(input_path)?;
+
+    let resized: DynamicImage = if full {
+        img
+    } else {
+        let (width, height) = img.dimensions();
+        let (new_width, new_height) = calculate_dimensions(width, height, max_dimension);
+
+        if new_width < width || new_height < height {
+            img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
+        } else {
+            img
+        }
+    };
+
+    let mut bytes = Vec::new();
+    resized
+        .write_to(&mut Cursor::new(&mut bytes), format.to_format())
+        .map_err(|e| format!("Failed to encode image {}: {}", input_path.display(), e))?;
+
+    fs::write(output_path, &bytes).map_err(|e| {
+        format!(
+            "Failed to write output file {}: {}",
+            output_path.display(),
+            e
+        )
+    })?;
+
+    Ok(false)
+}
+
+fn try_generate_heic_preview_with_magick(
     input_path: &Path,
     output_path: &Path,
     max_dimension: u32,
     full: bool,
-    clear_metadata: bool,
 ) -> Result<bool, String> {
     let mut command = ProcessCommand::new("magick");
-    command.arg(input_path).arg("-auto-orient");
-
-    if clear_metadata {
-        command.arg("-strip");
-    }
+    command.arg(input_path).arg("-auto-orient").arg("-strip");
 
     if !full {
         command
@@ -593,6 +598,67 @@ fn try_generate_preview_with_magick(
     Err(format!(
         "ImageMagick failed to convert {}: {}",
         input_path.display(),
+        stderr.trim()
+    ))
+}
+
+fn copy_metadata_with_exiftool(
+    input_path: &Path,
+    output_path: &Path,
+    orientation_normalized: bool,
+) -> Result<(), String> {
+    let (width, height) = image::image_dimensions(output_path).map_err(|e| {
+        format!(
+            "Failed to read output dimensions for {}: {}",
+            output_path.display(),
+            e
+        )
+    })?;
+
+    let mut command = ProcessCommand::new("exiftool");
+    command
+        .arg("-overwrite_original")
+        .arg("-TagsFromFile")
+        .arg(input_path)
+        .arg("-EXIF:all")
+        .arg("-XMP:all")
+        .arg("-IPTC:all")
+        .arg("-ICC_Profile")
+        .arg(format!("-IFD0:ImageWidth={width}"))
+        .arg(format!("-IFD0:ImageHeight={height}"))
+        .arg(format!("-ExifImageWidth={width}"))
+        .arg(format!("-ExifImageHeight={height}"));
+
+    if orientation_normalized {
+        command.arg("-Orientation#=1");
+    }
+
+    let output = match command.arg(output_path).output() {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "ExifTool is required to preserve metadata for {}. Install `exiftool` or rerun with --clear-metadata.",
+                input_path.display()
+            ));
+        }
+        Err(err) => {
+            return Err(format!(
+                "Failed to launch ExifTool for {}: {}",
+                input_path.display(),
+                err
+            ));
+        }
+    };
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "ExifTool failed to copy metadata from {} to {}: {}",
+        input_path.display(),
+        output_path.display(),
         stderr.trim()
     ))
 }
@@ -657,6 +723,10 @@ mod tests {
             .is_ok()
     }
 
+    fn exiftool_available() -> bool {
+        ProcessCommand::new("exiftool").arg("-ver").output().is_ok()
+    }
+
     fn identify_verbose(path: &Path) -> String {
         let output = ProcessCommand::new("identify")
             .arg("-verbose")
@@ -671,6 +741,24 @@ mod tests {
         );
 
         String::from_utf8(output.stdout).expect("identify output should be valid utf-8")
+    }
+
+    fn exiftool_dump(path: &Path) -> String {
+        let output = ProcessCommand::new("exiftool")
+            .arg("-a")
+            .arg("-G1")
+            .arg("-s")
+            .arg(path)
+            .output()
+            .expect("exiftool should run");
+
+        assert!(
+            output.status.success(),
+            "exiftool should succeed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        String::from_utf8(output.stdout).expect("exiftool output should be valid utf-8")
     }
 
     #[test]
@@ -705,7 +793,7 @@ mod tests {
             std::env::temp_dir().join(format!("photool-preview-heic-{}.jpg", process::id()));
         let _ = fs::remove_file(&output_path);
 
-        try_generate_preview_with_magick(&path, &output_path, 1000, false, false)
+        try_generate_heic_preview_with_magick(&path, &output_path, 1000, false)
             .expect("ImageMagick HEIC preview should succeed");
 
         let image = image::open(&output_path).expect("generated preview should be readable");
@@ -758,7 +846,7 @@ mod tests {
 
     #[test]
     fn preserves_metadata_by_default_when_magick_is_available() {
-        if !magick_available() {
+        if !exiftool_available() {
             return;
         }
 
@@ -790,12 +878,40 @@ mod tests {
         );
         assert!(report.contains("Filesize:"), "missing filesize metadata");
 
+        let (width, height) = image::image_dimensions(&output_path)
+            .expect("generated preview dimensions should be readable");
+        let metadata = exiftool_dump(&output_path);
+        assert!(
+            metadata.contains(&format!(
+                "[File]          ImageWidth                      : {width}"
+            )),
+            "file image width should match preview output"
+        );
+        assert!(
+            metadata.contains(&format!(
+                "[File]          ImageHeight                     : {height}"
+            )),
+            "file image height should match preview output"
+        );
+        assert!(
+            metadata.contains(&format!(
+                "[ExifIFD]       ExifImageWidth                  : {width}"
+            )),
+            "embedded EXIF width should match preview output"
+        );
+        assert!(
+            metadata.contains(&format!(
+                "[ExifIFD]       ExifImageHeight                 : {height}"
+            )),
+            "embedded EXIF height should match preview output"
+        );
+
         let _ = fs::remove_file(output_path);
     }
 
     #[test]
     fn clear_metadata_strips_profiles_when_magick_is_available() {
-        if !magick_available() {
+        if !exiftool_available() {
             return;
         }
 
@@ -826,6 +942,62 @@ mod tests {
             "unexpected XMP rating metadata"
         );
         assert!(report.contains("Filesize:"), "missing filesize metadata");
+
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn heic_metadata_dimensions_match_preview_output() {
+        if !magick_available() || !exiftool_available() {
+            return;
+        }
+
+        let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/DSCF1164.HEIC");
+        let output_path =
+            std::env::temp_dir().join(format!("photool-preview-heic-meta-{}.jpg", process::id()));
+        let _ = fs::remove_file(&output_path);
+
+        do_generate_preview(
+            &input_path,
+            &output_path,
+            1000,
+            OutputFormat::Jpeg,
+            false,
+            false,
+        )
+        .expect("HEIC preview generation should succeed");
+
+        let (width, height) = image::image_dimensions(&output_path)
+            .expect("generated preview dimensions should be readable");
+        let metadata = exiftool_dump(&output_path);
+        assert!(
+            metadata.contains(&format!(
+                "[File]          ImageWidth                      : {width}"
+            )),
+            "file image width should match preview output"
+        );
+        assert!(
+            metadata.contains(&format!(
+                "[File]          ImageHeight                     : {height}"
+            )),
+            "file image height should match preview output"
+        );
+        assert!(
+            metadata.contains(&format!(
+                "[ExifIFD]       ExifImageWidth                  : {width}"
+            )),
+            "embedded EXIF width should match preview output"
+        );
+        assert!(
+            metadata.contains(&format!(
+                "[ExifIFD]       ExifImageHeight                 : {height}"
+            )),
+            "embedded EXIF height should match preview output"
+        );
+        assert!(
+            metadata.contains("[XMP-xmp]       Rating                          : 0"),
+            "XMP rating should be preserved"
+        );
 
         let _ = fs::remove_file(output_path);
     }

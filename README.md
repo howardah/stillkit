@@ -108,6 +108,7 @@ pht preview ./photos --full
 
 This keeps the original image dimensions and only converts into the selected preview format.
 By default previews keep the source photo metadata; add `--clear-metadata` to strip it.
+Metadata-preserving previews use `exiftool`, and HEIC previews use ImageMagick's `magick` when available.
 
 ## Notes
 
