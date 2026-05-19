@@ -398,22 +398,12 @@ fn collect_image_files(dir: &Path, recursive: bool) -> Vec<PathBuf> {
     progress.set_message("Scanning for images");
     progress.enable_steady_tick(Duration::from_millis(100));
 
-    let image_extensions: Vec<&str> = vec![
-        "jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif", "arw", "cr2",
-        "nef", "raf", "dng",
-    ];
-
     if recursive {
         for entry in walkdir::WalkDir::new(dir).into_iter().flatten() {
             let path = entry.path();
             if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if image_extensions
-                        .iter()
-                        .any(|&e| e.eq_ignore_ascii_case(ext))
-                    {
-                        result.push(path.to_path_buf());
-                    }
+                if is_supported_image(path) {
+                    result.push(path.to_path_buf());
                 }
                 progress.inc(1);
             }
@@ -422,13 +412,8 @@ fn collect_image_files(dir: &Path, recursive: bool) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if image_extensions
-                        .iter()
-                        .any(|&e| e.eq_ignore_ascii_case(ext))
-                    {
-                        result.push(path);
-                    }
+                if is_supported_image(&path) {
+                    result.push(path);
                 }
                 progress.inc(1);
             }
@@ -457,14 +442,7 @@ fn do_generate_preview(
         return Ok(());
     }
 
-    let img = if is_heic {
-        load_heic_image(input_path)?
-    } else {
-        image::ImageReader::open(input_path)
-            .map_err(|e| format!("Failed to open image {}: {}", input_path.display(), e))?
-            .decode()
-            .map_err(|e| format!("Failed to decode image {}: {}", input_path.display(), e))?
-    };
+    let img = load_image(input_path)?;
 
     // Calculate new dimensions maintaining aspect ratio
     let (width, height) = img.dimensions();
@@ -492,6 +470,49 @@ fn do_generate_preview(
     })?;
 
     Ok(())
+}
+
+pub(crate) fn is_supported_image(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "jpg"
+                    | "jpeg"
+                    | "png"
+                    | "webp"
+                    | "gif"
+                    | "bmp"
+                    | "tiff"
+                    | "tif"
+                    | "heic"
+                    | "heif"
+                    | "arw"
+                    | "cr2"
+                    | "nef"
+                    | "raf"
+                    | "dng"
+            )
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn load_image(path: &Path) -> Result<DynamicImage, String> {
+    let is_heic = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "heic" | "heif"))
+        .unwrap_or(false);
+
+    if is_heic {
+        load_heic_image(path)
+    } else {
+        image::ImageReader::open(path)
+            .map_err(|e| format!("Failed to open image {}: {}", path.display(), e))?
+            .decode()
+            .map_err(|e| format!("Failed to decode image {}: {}", path.display(), e))
+    }
 }
 
 fn try_generate_heic_preview_with_magick(

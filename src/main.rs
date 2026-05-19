@@ -2,6 +2,7 @@ use clap::{Arg, ArgAction, Command};
 
 mod file;
 mod preview;
+mod rate;
 mod sort;
 
 fn main() {
@@ -40,12 +41,14 @@ fn main() {
         .subcommand(sort::subcommand())
         .subcommand(file::subcommand())
         .subcommand(preview::subcommand())
+        .subcommand(rate::subcommand())
         .get_matches();
 
     match matches.subcommand() {
         Some(("sort", sub_m)) => sort::run(sub_m),
         Some(("photos", sub_m)) => file::run(sub_m),
         Some(("preview", sub_m)) => preview::run(sub_m),
+        Some(("rate", sub_m)) => rate::run(sub_m),
         _ => {
             if matches.get_one::<String>("directory").is_some() {
                 sort::run(&matches);

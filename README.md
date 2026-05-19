@@ -9,6 +9,7 @@ Supports custom folder names, ignored extensions, and recursive sorting.
 - **Custom mappings** — Map specific extensions to custom folder names (e.g., `raf:RAW`).
 - **Ignore extensions** — Skip moving specific file types or all files.
 - **Recursive mode** — Process subdirectories automatically.
+- **Interactive rating UI** — Browse images in a terminal UI, preview them, and assign 0-5 star ratings.
 - **Cross-platform** — Works on macOS, Linux, and Windows.
 - **Version flag** — Automatically shows the version from `Cargo.toml`.
 
@@ -79,6 +80,15 @@ photool ./photos -r
 ```
 
 Sorts all files in `photos/` and its subdirectories.
+
+**Rate images in a TUI**
+
+```sh
+pht rate ./photos
+```
+
+Browse images in a terminal UI, preview the selected image on the right, and press `0`-`5` to
+rename the file with a star suffix such as `fish_★☆☆☆☆.jpg`.
 
 ## Notes
 
