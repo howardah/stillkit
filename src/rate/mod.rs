@@ -62,8 +62,7 @@ fn run_inner(matches: &ArgMatches) -> Result<(), String> {
     }
 
     let mut app = App::new(root, entries);
-    ratatui::run(|terminal| app.run(terminal))
-        .map_err(|e| format!("failed to run TUI: {e}"))?;
+    ratatui::run(|terminal| app.run(terminal)).map_err(|e| format!("failed to run TUI: {e}"))?;
     Ok(())
 }
 
@@ -71,6 +70,7 @@ struct App {
     root: PathBuf,
     entries: Vec<ImageEntry>,
     list_state: ListState,
+    preview_mode: PreviewMode,
     preview: Option<PreviewCache>,
     status: Option<String>,
 }
@@ -81,8 +81,12 @@ impl App {
             root,
             entries,
             list_state: ListState::default().with_selected(Some(0)),
+            preview_mode: PreviewMode::Color256,
             preview: None,
-            status: Some("Use arrows or j/k to move. Press 0-5 to rate. Press q to quit.".into()),
+            status: Some(
+                "Use arrows or j/k to move. Press 0-5 to rate. Press p to toggle preview mode. Press q to quit."
+                    .into(),
+            ),
         }
     }
 
@@ -102,6 +106,7 @@ impl App {
                     KeyCode::Char(digit @ '0'..='5') => {
                         self.rate_selected(digit as u8 - b'0');
                     }
+                    KeyCode::Char('p') => self.toggle_preview_mode(),
                     _ => {}
                 }
             }
@@ -109,11 +114,12 @@ impl App {
     }
 
     fn render(&mut self, frame: &mut Frame) {
-        let [content_area, footer_area] = frame.area().layout(
-            &Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).spacing(1),
-        );
+        let [content_area, footer_area] = frame
+            .area()
+            .layout(&Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).spacing(1));
         let [list_area, detail_area] = content_area.layout(
-            &Layout::horizontal([Constraint::Percentage(36), Constraint::Percentage(64)]).spacing(1),
+            &Layout::horizontal([Constraint::Percentage(36), Constraint::Percentage(64)])
+                .spacing(1),
         );
 
         self.render_list(frame, list_area);
@@ -159,7 +165,12 @@ impl App {
         let Some((display_title, disk_name, stars)) = self.selected_entry().map(|entry| {
             (
                 entry.display_title.clone(),
-                entry.path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+                entry
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
                 entry.rating_label(),
             )
         }) else {
@@ -171,9 +182,9 @@ impl App {
         };
 
         let title = Line::from(display_title.clone()).centered();
-        let block = panel_block("")
-            .title_top(title)
-            .title_bottom(Line::from(stars).centered());
+        let block = panel_block("").title_top(title).title_bottom(
+            Line::from(format!("{stars}  [{}]", self.preview_mode.label())).centered(),
+        );
         let inner = block.inner(preview_area);
         frame.render_widget(Clear, preview_area);
         frame.render_widget(block, preview_area);
@@ -181,8 +192,9 @@ impl App {
         self.ensure_preview(inner);
 
         let preview = match &self.preview {
-            Some(cache) if cache.error.is_none() => Paragraph::new(cache.lines.clone())
-                .block(Block::new()),
+            Some(cache) if cache.error.is_none() => {
+                Paragraph::new(cache.lines.clone()).block(Block::new())
+            }
             Some(cache) => Paragraph::new(cache.error.clone().unwrap_or_default())
                 .style(Style::new().fg(Color::Yellow))
                 .centered(),
@@ -202,11 +214,17 @@ impl App {
             ]),
             Line::from(vec![
                 Span::styled("Directory: ", Style::new().add_modifier(Modifier::BOLD)),
-                Span::styled(self.root.display().to_string(), Style::new().fg(Color::DarkGray)),
+                Span::styled(
+                    self.root.display().to_string(),
+                    Style::new().fg(Color::DarkGray),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("Keys: ", Style::new().add_modifier(Modifier::BOLD)),
-                Span::styled("0-5 rate, q quit", Style::new().fg(Color::DarkGray)),
+                Span::styled(
+                    "0-5 rate, p toggle preview, q quit",
+                    Style::new().fg(Color::DarkGray),
+                ),
             ]),
         ];
 
@@ -271,12 +289,22 @@ impl App {
         };
 
         if let Some(cache) = &self.preview {
-            if cache.path == path && cache.width == area.width && cache.height == area.height {
+            if cache.path == path
+                && cache.width == area.width
+                && cache.height == area.height
+                && cache.mode == self.preview_mode
+            {
                 return;
             }
         }
 
-        self.preview = Some(render_preview(&path, area));
+        self.preview = Some(render_preview(&path, area, self.preview_mode));
+    }
+
+    fn toggle_preview_mode(&mut self) {
+        self.preview_mode = self.preview_mode.toggle();
+        self.preview = None;
+        self.status = Some(format!("Preview mode: {}", self.preview_mode.description()));
     }
 
     fn rate_selected(&mut self, rating: u8) {
@@ -330,13 +358,14 @@ impl ImageEntry {
         let display_title = build_display_title(&original_stem, extension.as_deref());
 
         let relative = path.strip_prefix(root).unwrap_or(&path);
-        let display_path = if relative.parent().is_none() || relative.parent() == Some(Path::new("")) {
-            display_title.clone()
-        } else {
-            let mut relative_display = relative.to_path_buf();
-            relative_display.set_file_name(&display_title);
-            relative_display.to_string_lossy().into_owned()
-        };
+        let display_path =
+            if relative.parent().is_none() || relative.parent() == Some(Path::new("")) {
+                display_title.clone()
+            } else {
+                let mut relative_display = relative.to_path_buf();
+                relative_display.set_file_name(&display_title);
+                relative_display.to_string_lossy().into_owned()
+            };
 
         Self {
             path,
@@ -359,8 +388,38 @@ struct PreviewCache {
     path: PathBuf,
     width: u16,
     height: u16,
+    mode: PreviewMode,
     lines: Vec<Line<'static>>,
     error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreviewMode {
+    Ascii,
+    Color256,
+}
+
+impl PreviewMode {
+    fn toggle(self) -> Self {
+        match self {
+            Self::Ascii => Self::Color256,
+            Self::Color256 => Self::Ascii,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ascii => "ASCII",
+            Self::Color256 => "COLOR",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Ascii => "ASCII (default, fast, stable)",
+            Self::Color256 => "256-color (higher fidelity, best effort)",
+        }
+    }
 }
 
 fn collect_entries(root: &Path, recursive: bool) -> Result<Vec<ImageEntry>, String> {
@@ -424,11 +483,12 @@ fn rename_with_rating(entry: &ImageEntry, rating: u8) -> Result<PathBuf, String>
     Ok(new_path)
 }
 
-fn render_preview(path: &Path, area: Rect) -> PreviewCache {
+fn render_preview(path: &Path, area: Rect, mode: PreviewMode) -> PreviewCache {
     let mut cache = PreviewCache {
         path: path.to_path_buf(),
         width: area.width,
         height: area.height,
+        mode,
         lines: Vec::new(),
         error: None,
     };
@@ -440,7 +500,7 @@ fn render_preview(path: &Path, area: Rect) -> PreviewCache {
 
     match load_preview_image(path, area.width, area.height) {
         Ok(image) => {
-            cache.lines = image_to_lines(&image, area.width, area.height);
+            cache.lines = image_to_lines(&image, area.width, area.height, mode);
         }
         Err(err) => {
             cache.error = Some(err);
@@ -450,7 +510,11 @@ fn render_preview(path: &Path, area: Rect) -> PreviewCache {
     cache
 }
 
-fn load_preview_image(path: &Path, max_width: u16, max_height: u16) -> Result<DynamicImage, String> {
+fn load_preview_image(
+    path: &Path,
+    max_width: u16,
+    max_height: u16,
+) -> Result<DynamicImage, String> {
     let pixel_width = max_width.max(1) as u32;
     let pixel_height = (max_height.max(1) as u32).saturating_mul(2);
 
@@ -500,10 +564,32 @@ fn load_image_with_magick(
 
     image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
         .map(Some)
-        .map_err(|e| format!("Failed to decode ImageMagick output for {}: {}", path.display(), e))
+        .map_err(|e| {
+            format!(
+                "Failed to decode ImageMagick output for {}: {}",
+                path.display(),
+                e
+            )
+        })
 }
 
-fn image_to_lines(image: &image::DynamicImage, max_width: u16, max_height: u16) -> Vec<Line<'static>> {
+fn image_to_lines(
+    image: &image::DynamicImage,
+    max_width: u16,
+    max_height: u16,
+    mode: PreviewMode,
+) -> Vec<Line<'static>> {
+    match mode {
+        PreviewMode::Ascii => image_to_ascii_lines(image, max_width, max_height),
+        PreviewMode::Color256 => image_to_color_lines(image, max_width, max_height),
+    }
+}
+
+fn image_to_ascii_lines(
+    image: &image::DynamicImage,
+    max_width: u16,
+    max_height: u16,
+) -> Vec<Line<'static>> {
     let pixel_height = (max_height as u32).saturating_mul(2).max(1);
     let resized = image.thumbnail(max_width.max(1) as u32, pixel_height);
     let gray = resized.to_luma8();
@@ -550,9 +636,67 @@ fn image_to_lines(image: &image::DynamicImage, max_width: u16, max_height: u16) 
     lines
 }
 
+fn image_to_color_lines(
+    image: &image::DynamicImage,
+    max_width: u16,
+    max_height: u16,
+) -> Vec<Line<'static>> {
+    let pixel_height = (max_height as u32).saturating_mul(2).max(1);
+    let resized = image.thumbnail(max_width.max(1) as u32, pixel_height);
+    let rgba = resized.to_rgba8();
+    let (width, height) = rgba.dimensions();
+
+    let row_count = height.div_ceil(2) as usize;
+    let horizontal_padding = max_width.saturating_sub(width as u16) as usize / 2;
+    let vertical_padding = max_height.saturating_sub(row_count as u16) as usize / 2;
+    let blank_line = " ".repeat(max_width as usize);
+
+    let mut lines = Vec::with_capacity(max_height as usize);
+    for _ in 0..vertical_padding {
+        lines.push(Line::from(blank_line.clone()));
+    }
+
+    for y in (0..height).step_by(2) {
+        let mut spans = Vec::with_capacity(width as usize + 2);
+        if horizontal_padding > 0 {
+            spans.push(Span::raw(" ".repeat(horizontal_padding)));
+        }
+
+        for x in 0..width {
+            let top = rgba.get_pixel(x, y).0;
+            let bottom = if y + 1 < height {
+                rgba.get_pixel(x, y + 1).0
+            } else {
+                top
+            };
+
+            spans.push(Span::styled(
+                "▀",
+                Style::new()
+                    .fg(rgb_to_256_color(top[0], top[1], top[2]))
+                    .bg(rgb_to_256_color(bottom[0], bottom[1], bottom[2])),
+            ));
+        }
+
+        let used_width = horizontal_padding + width as usize;
+        if used_width < max_width as usize {
+            spans.push(Span::raw(" ".repeat(max_width as usize - used_width)));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    while lines.len() < max_height as usize {
+        lines.push(Line::from(blank_line.clone()));
+    }
+
+    lines
+}
+
 fn split_file_name(file_name: &str) -> (String, Option<String>) {
     match file_name.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => (stem.to_string(), Some(extension.to_string())),
+        Some((stem, extension)) if !stem.is_empty() => {
+            (stem.to_string(), Some(extension.to_string()))
+        }
         _ => (file_name.to_string(), None),
     }
 }
@@ -619,6 +763,15 @@ fn map_intensity_to_char(intensity: u8) -> char {
     ASCII_RAMP[index] as char
 }
 
+fn rgb_to_256_color(r: u8, g: u8, b: u8) -> Color {
+    let to_cube = |channel: u8| -> u8 { (((u16::from(channel) * 5) + 127) / 255) as u8 };
+
+    let r = to_cube(r);
+    let g = to_cube(g);
+    let b = to_cube(b);
+    Color::Indexed(16 + 36 * r + 6 * g + b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,8 +779,14 @@ mod tests {
     #[test]
     fn parses_rated_stems() {
         assert_eq!(split_rating_suffix("fish"), ("fish".to_string(), None));
-        assert_eq!(split_rating_suffix("fish_★☆☆☆☆"), ("fish".to_string(), Some(1)));
-        assert_eq!(split_rating_suffix("fish_☆☆☆☆☆"), ("fish".to_string(), Some(0)));
+        assert_eq!(
+            split_rating_suffix("fish_★☆☆☆☆"),
+            ("fish".to_string(), Some(1))
+        );
+        assert_eq!(
+            split_rating_suffix("fish_☆☆☆☆☆"),
+            ("fish".to_string(), Some(0))
+        );
     }
 
     #[test]
@@ -644,8 +803,14 @@ mod tests {
 
     #[test]
     fn builds_rated_names() {
-        assert_eq!(build_rated_file_name("fish", Some("jpg"), 1), "fish_★☆☆☆☆.jpg");
-        assert_eq!(build_rated_file_name("fish", Some("jpg"), 5), "fish_★★★★★.jpg");
+        assert_eq!(
+            build_rated_file_name("fish", Some("jpg"), 1),
+            "fish_★☆☆☆☆.jpg"
+        );
+        assert_eq!(
+            build_rated_file_name("fish", Some("jpg"), 5),
+            "fish_★★★★★.jpg"
+        );
         assert_eq!(build_rated_file_name("fish", None, 0), "fish_☆☆☆☆☆");
     }
 }
