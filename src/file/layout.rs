@@ -20,7 +20,7 @@ pub fn day_dir_name(start: NaiveDate, end: NaiveDate) -> String {
 pub fn is_primary(ext: &str) -> bool {
     matches!(
         ext.to_lowercase().as_str(),
-        "jpg" | "jpeg" | "heic" | "mp4" | "mov"
+        "jpg" | "jpeg" | "heic" | "heif" | "hif" | "mp4" | "mov"
     )
 }
 
@@ -58,5 +58,18 @@ fn month_name(month: u32) -> &'static str {
         11 => "November",
         12 => "December",
         _ => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{file_subdir, is_primary};
+
+    #[test]
+    fn heic_family_extensions_are_primary() {
+        for ext in ["heic", "heif", "hif", "HIF"] {
+            assert!(is_primary(ext), "{ext} should be a primary extension");
+            assert_eq!(file_subdir(ext, true), None);
+        }
     }
 }

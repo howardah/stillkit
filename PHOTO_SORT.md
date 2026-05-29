@@ -35,8 +35,9 @@ The existing extension-based sorter remains the default `photool <directory>` in
     2026-04-15/             ← day dir (single day)
       IMG_001.jpg
       IMG_002.heic
+      IMG_003.hif
       RAW/
-        IMG_003.raf
+        IMG_004.raf
     2026-04-20 - 2026-04-21/  ← day-range dir (date range)
       IMG_010.jpg
       RAW/
@@ -59,13 +60,13 @@ A group is formed from photos whose dates are no more than 2 calendar days apart
 
 | Extension                                                                                                                  | Destination within the day dir                                                   |
 | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `.jpg`, `.jpeg`, `.heic`                                                                                                   | Day dir root                                                                     |
+| `.jpg`, `.jpeg`, `.heic`, `.heif`, `.hif`                                                                                   | Day dir root                                                                     |
 | `.mp4`, `.mov`                                                                                                             | Day dir root                                                                     |
-| `.raf`, `.cr2`, `.nef`, `.arw`, `.dng`, `.rw2`, and other non-listed types _when JPG/HEIC/MP4/MOV also exist in the group_ | `RAW/` sub-subdirectory                                                          |
+| `.raf`, `.cr2`, `.nef`, `.arw`, `.dng`, `.rw2`, and other non-listed types _when JPG/HEIC/HEIF/HIF/MP4/MOV also exist in the group_ | `RAW/` sub-subdirectory                                                          |
 | Any non-listed types _when no JPG/HEIC/MP4/MOV exist in the group_                                                         | Day dir root                                                                     |
 | Multiple differing non-listed extensions in the same group                                                                 | Sorted into per-extension subdirectories using the existing extension-sort logic |
 
-The RAW subdir only exists when there are "primary" files (JPG/HEIC/MP4/MOV) to distinguish from. If a group contains only raw files, they are placed in the day dir root. If a group contains a mix of unlisted types (e.g. `.raf` and `.xmp`), those types each get their own subdir via the existing extension-sort logic.
+The RAW subdir only exists when there are "primary" files (JPG/HEIC/HEIF/HIF/MP4/MOV) to distinguish from. If a group contains only raw files, they are placed in the day dir root. If a group contains a mix of unlisted types (e.g. `.raf` and `.xmp`), those types each get their own subdir via the existing extension-sort logic.
 
 ---
 

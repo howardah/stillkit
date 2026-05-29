@@ -485,6 +485,7 @@ pub(crate) fn is_supported_image(path: &Path) -> bool {
                     | "tif"
                     | "heic"
                     | "heif"
+                    | "hif"
                     | "arw"
                     | "cr2"
                     | "nef"
@@ -496,13 +497,7 @@ pub(crate) fn is_supported_image(path: &Path) -> bool {
 }
 
 pub(crate) fn load_image(path: &Path) -> Result<DynamicImage, String> {
-    let is_heic = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "heic" | "heif"))
-        .unwrap_or(false);
-
-    if is_heic {
+    if has_heic_extension(path) {
         load_heic_image(path)
     } else {
         image::ImageReader::open(path)
@@ -519,14 +514,8 @@ fn generate_preview_image(
     format: OutputFormat,
     full: bool,
 ) -> Result<bool, String> {
-    // HEIC/HEIF benefits from ImageMagick's decoder and auto-orientation when available.
-    let is_heic = input_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "heic" | "heif"))
-        .unwrap_or(false);
-
-    if is_heic
+    // HEIC-family files benefit from ImageMagick's decoder and auto-orientation when available.
+    if has_heic_extension(input_path)
         && try_generate_heic_preview_with_magick(input_path, output_path, max_dimension, full)?
     {
         return Ok(true);
@@ -561,6 +550,13 @@ fn generate_preview_image(
     })?;
 
     Ok(false)
+}
+
+fn has_heic_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "heic" | "heif" | "hif"))
+        .unwrap_or(false)
 }
 
 fn try_generate_heic_preview_with_magick(
@@ -780,6 +776,13 @@ mod tests {
             Some(ExistingFileAction::Skip)
         );
         assert_eq!(parse_existing_file_action_input("later"), None);
+    }
+
+    #[test]
+    fn supports_hif_as_heic_family_image() {
+        assert!(is_supported_image(Path::new("photo.hif")));
+        assert!(is_supported_image(Path::new("photo.HIF")));
+        assert!(has_heic_extension(Path::new("photo.hif")));
     }
 
     #[test]
