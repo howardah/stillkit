@@ -128,7 +128,17 @@ still previews ./photos --full
 
 This keeps the original image dimensions and only converts into the selected preview format.
 By default previews keep the source photo metadata; add `--clear-metadata` to strip it.
-Metadata-preserving previews use `exiftool`, and HEIC/HEIF/HIF previews use ImageMagick's `magick` when available.
+Metadata-preserving previews use `exiftool`. On macOS, HEIC/HEIF/HIF JPEG previews use Apple's
+hardware-accelerated `sips` when available, then fall back to the native Rust thumbnail path or
+ImageMagick. `--clear-metadata` uses ImageMagick so metadata stripping remains exact.
+
+For an opt-in self-contained Rust HEIC decoder, build with `cargo install --path . --features native-heic`.
+This backend is tried first and falls back to ImageMagick for unsupported files. The `heic` crate is
+AGPL-or-commercial licensed, so review that license before distributing binaries built with this feature.
+
+The Rust decoder uses CPU SIMD, not Apple hardware HEVC decoding. Hardware acceleration for the
+Rust path would require a separate VideoToolbox backend with platform FFI and additional codec and
+distribution considerations; `sips` is the supported accelerated path on macOS for now.
 
 ## Notes
 

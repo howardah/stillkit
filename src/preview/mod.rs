@@ -459,8 +459,14 @@ fn do_generate_preview(
     full: bool,
     clear_metadata: bool,
 ) -> Result<(), String> {
-    let orientation_normalized =
-        generate_preview_image(input_path, output_path, max_dimension, format, full)?;
+    let orientation_normalized = generate_preview_image(
+        input_path,
+        output_path,
+        max_dimension,
+        format,
+        full,
+        clear_metadata,
+    )?;
 
     if !clear_metadata {
         copy_metadata_with_exiftool(input_path, output_path, orientation_normalized)?;
@@ -513,12 +519,45 @@ fn generate_preview_image(
     max_dimension: u32,
     format: OutputFormat,
     full: bool,
+    clear_metadata: bool,
 ) -> Result<bool, String> {
-    // HEIC-family files benefit from ImageMagick's decoder and auto-orientation when available.
-    if has_heic_extension(input_path)
-        && try_generate_heic_preview_with_magick(input_path, output_path, max_dimension, full)?
-    {
-        return Ok(true);
+    if has_heic_extension(input_path) {
+        // macOS's ImageIO-backed `sips` can use Apple's hardware-accelerated
+        // HEIF/HEVC pipeline. It preserves the existing metadata flow here;
+        // clear-metadata mode stays on ImageMagick so stripping remains exact.
+        if !clear_metadata
+            && try_generate_heic_preview_with_sips(
+                input_path,
+                output_path,
+                max_dimension,
+                format,
+                full,
+            )?
+        {
+            return Ok(true);
+        }
+
+        // The native path is opt-in because the pure-Rust HEIC decoder has an
+        // AGPL-or-commercial license. It also leaves ImageMagick available for
+        // files or metadata variants the native decoder cannot handle.
+        #[cfg(feature = "native-heic")]
+        if try_generate_heic_preview_with_native(
+            input_path,
+            output_path,
+            max_dimension,
+            format,
+            full,
+        )
+        .is_ok()
+        {
+            return Ok(true);
+        }
+
+        // HEIC-family files benefit from ImageMagick's decoder and auto-orientation
+        // when available. This is also the compatibility fallback for the native path.
+        if try_generate_heic_preview_with_magick(input_path, output_path, max_dimension, full)? {
+            return Ok(true);
+        }
     }
 
     let img = load_image(input_path)?;
@@ -550,6 +589,143 @@ fn generate_preview_image(
     })?;
 
     Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+fn try_generate_heic_preview_with_sips(
+    input_path: &Path,
+    output_path: &Path,
+    max_dimension: u32,
+    format: OutputFormat,
+    full: bool,
+) -> Result<bool, String> {
+    // sips supports JPEG, PNG, and several Apple image formats, but not WebP.
+    // Restricting this fast path to JPEG keeps the output-format contract clear.
+    if !matches!(format, OutputFormat::Jpeg) {
+        return Ok(false);
+    }
+
+    let mut command = ProcessCommand::new("sips");
+    command.arg("-s").arg("format").arg("jpeg");
+
+    if !full {
+        command
+            .arg("--resampleHeightWidthMax")
+            .arg(max_dimension.to_string());
+    }
+
+    command.arg(input_path).arg("--out").arg(output_path);
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(format!(
+                "Failed to launch sips for {}: {}",
+                input_path.display(),
+                err
+            ));
+        }
+    };
+
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    // A present sips binary may still reject a HEIF variant. Let ImageMagick
+    // handle that case rather than making macOS less compatible than other OSes.
+    Ok(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn try_generate_heic_preview_with_sips(
+    _input_path: &Path,
+    _output_path: &Path,
+    _max_dimension: u32,
+    _format: OutputFormat,
+    _full: bool,
+) -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(feature = "native-heic")]
+fn try_generate_heic_preview_with_native(
+    input_path: &Path,
+    output_path: &Path,
+    max_dimension: u32,
+    format: OutputFormat,
+    full: bool,
+) -> Result<(), String> {
+    use heic::{DecoderConfig, PixelLayout};
+
+    if full {
+        return Err("native HEIC full-size decoding is not selected by the hybrid backend".into());
+    }
+
+    let data = fs::read(input_path)
+        .map_err(|e| format!("Failed to read HEIC file {}: {}", input_path.display(), e))?;
+
+    // A thumbnail avoids decoding the complete HEVC frame. Only use it when it
+    // is large enough to satisfy the requested preview size; otherwise the
+    // ImageMagick fallback produces a higher-resolution result.
+    let output = DecoderConfig::new()
+        .decode_thumbnail(&data, PixelLayout::Rgb8)
+        .map_err(|e| {
+            format!(
+                "Native HEIC thumbnail decode failed for {}: {}",
+                input_path.display(),
+                e
+            )
+        })?
+        .ok_or_else(|| {
+            format!(
+                "HEIC file has no embedded thumbnail: {}",
+                input_path.display()
+            )
+        })?;
+
+    let thumbnail_max_dimension = output.width.max(output.height);
+    if thumbnail_max_dimension < max_dimension {
+        return Err(format!(
+            "embedded HEIC thumbnail ({}px) is smaller than requested preview ({}px)",
+            thumbnail_max_dimension, max_dimension
+        ));
+    }
+
+    let image =
+        image::RgbImage::from_raw(output.width, output.height, output.data).ok_or_else(|| {
+            format!(
+                "Native HEIC decoder returned invalid pixels for {}",
+                input_path.display()
+            )
+        })?;
+    let image = DynamicImage::ImageRgb8(image);
+
+    let (width, height) = image.dimensions();
+    let (new_width, new_height) = calculate_dimensions(width, height, max_dimension);
+    let resized = if new_width < width || new_height < height {
+        image.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
+    } else {
+        image
+    };
+
+    let mut file = fs::File::create(output_path).map_err(|e| {
+        format!(
+            "Failed to create output file {}: {}",
+            output_path.display(),
+            e
+        )
+    })?;
+    resized
+        .write_to(&mut file, format.to_format())
+        .map_err(|e| {
+            format!(
+                "Failed to encode native HEIC preview {}: {}",
+                input_path.display(),
+                e
+            )
+        })?;
+
+    Ok(())
 }
 
 fn has_heic_extension(path: &Path) -> bool {
@@ -821,6 +997,30 @@ mod tests {
             "decoded HEIC output is unexpectedly blown out: {average}"
         );
 
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[cfg(feature = "native-heic")]
+    #[test]
+    #[ignore = "decoding the large 10-bit fixture is too slow for the normal test suite"]
+    fn native_heic_preview_is_readable() {
+        let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/DSCF1164.HEIC");
+        let output_path =
+            std::env::temp_dir().join(format!("stillkit-native-heic-{}.jpg", process::id()));
+        let _ = fs::remove_file(&output_path);
+
+        try_generate_heic_preview_with_native(
+            &input_path,
+            &output_path,
+            1000,
+            OutputFormat::Jpeg,
+            false,
+        )
+        .expect("native HEIC preview should succeed");
+
+        let image = image::open(&output_path).expect("native preview should be readable");
+        assert!(image.width() <= 1000);
+        assert!(image.height() <= 1000);
         let _ = fs::remove_file(output_path);
     }
 

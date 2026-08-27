@@ -7,6 +7,10 @@ edition = "2024"
 name = "still"
 path = "src/main.rs"
 
+[features]
+default = []
+native-heic = ["heic/parallel"]
+
 [dependencies]
 clap = "4.5.45"
 kamadak-exif = "0.6.1"
