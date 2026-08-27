@@ -12,7 +12,7 @@ The `photos` subcommand automates organizing camera photos into a date-based dir
 ## CLI Shape
 
 ```
-photool photos [OUTPUT] [-o OUTPUT] [-i INPUT] [-r] [--dry-run]
+still photos [OUTPUT] [-o OUTPUT] [-i INPUT] [-r] [--dry-run]
 ```
 
 | Argument              | Description                                                                                                 |
@@ -23,7 +23,7 @@ photool photos [OUTPUT] [-o OUTPUT] [-i INPUT] [-r] [--dry-run]
 | `-r` / `--recursive`  | Recurse into subdirectories of the input. Without this flag only the top level of the input dir is scanned. |
 | `--dry-run`           | Print intended actions; do not move or create anything.                                                     |
 
-The existing extension-based sorter remains the default `photool <directory>` invocation for backwards compatibility. A `sort` subcommand alias is also added so `photool sort <directory>` works identically.
+The existing extension-based sorter remains the default `still <directory>` invocation for backwards compatibility. A `sort` subcommand alias is also added so `still sort <directory>` works identically.
 
 ---
 
@@ -58,13 +58,13 @@ A group is formed from photos whose dates are no more than 2 calendar days apart
 
 ### File placement
 
-| Extension                                                                                                                  | Destination within the day dir                                                   |
-| -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `.jpg`, `.jpeg`, `.heic`, `.heif`, `.hif`                                                                                   | Day dir root                                                                     |
-| `.mp4`, `.mov`                                                                                                             | Day dir root                                                                     |
+| Extension                                                                                                                           | Destination within the day dir                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `.jpg`, `.jpeg`, `.heic`, `.heif`, `.hif`                                                                                           | Day dir root                                                                     |
+| `.mp4`, `.mov`                                                                                                                      | Day dir root                                                                     |
 | `.raf`, `.cr2`, `.nef`, `.arw`, `.dng`, `.rw2`, and other non-listed types _when JPG/HEIC/HEIF/HIF/MP4/MOV also exist in the group_ | `RAW/` sub-subdirectory                                                          |
-| Any non-listed types _when no JPG/HEIC/MP4/MOV exist in the group_                                                         | Day dir root                                                                     |
-| Multiple differing non-listed extensions in the same group                                                                 | Sorted into per-extension subdirectories using the existing extension-sort logic |
+| Any non-listed types _when no JPG/HEIC/MP4/MOV exist in the group_                                                                  | Day dir root                                                                     |
+| Multiple differing non-listed extensions in the same group                                                                          | Sorted into per-extension subdirectories using the existing extension-sort logic |
 
 The RAW subdir only exists when there are "primary" files (JPG/HEIC/HEIF/HIF/MP4/MOV) to distinguish from. If a group contains only raw files, they are placed in the day dir root. If a group contains a mix of unlisted types (e.g. `.raf` and `.xmp`), those types each get their own subdir via the existing extension-sort logic.
 

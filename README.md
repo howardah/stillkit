@@ -1,4 +1,4 @@
-# photool
+# stillkit
 
 A simple Rust CLI tool for sorting files into directories based on their file extensions.
 Supports custom folder names, ignored extensions, and recursive sorting.
@@ -18,12 +18,12 @@ Supports custom folder names, ignored extensions, and recursive sorting.
 ### Build from source
 
 ```sh
-git clone https://github.com/howardah/photool.git
-cd photool
+git clone https://github.com/howardah/stillkit.git
+cd stillkit
 cargo install --path .
 ```
 
-This installs `photool` to your `~/.cargo/bin`, so make sure it’s in your `PATH`.
+This installs `still` to your `~/.cargo/bin`, so make sure it’s in your `PATH`.
 
 ### Or run without installing
 
@@ -34,7 +34,7 @@ cargo run -- <directory> [options]
 ## Usage
 
 ```sh
-photool <directory> [options]
+still <directory> [options]
 ```
 
 ### Options
@@ -52,7 +52,7 @@ photool <directory> [options]
 **Basic sorting**
 
 ```sh
-photool ./photos
+still ./photos
 ```
 
 Moves files into folders like `JPG`, `PNG`, `MP4` based on extension.
@@ -60,7 +60,7 @@ Moves files into folders like `JPG`, `PNG`, `MP4` based on extension.
 **Custom mappings**
 
 ```sh
-photool ./photos -e raf:RAW -e jpg:JPEGs
+still ./photos -e raf:RAW -e jpg:JPEGs
 ```
 
 Moves `.raf` files into `RAW/` and `.jpg` files into `JPEGs/`.
@@ -68,7 +68,7 @@ Moves `.raf` files into `RAW/` and `.jpg` files into `JPEGs/`.
 **Ignore some extensions**
 
 ```sh
-photool ./photos --ignore heic --ignore all
+still ./photos --ignore heic --ignore all
 ```
 
 Skips `.heic` files or all files if `all` is specified.
@@ -76,7 +76,7 @@ Skips `.heic` files or all files if `all` is specified.
 **Recursive sorting**
 
 ```sh
-photool ./photos -r
+still ./photos -r
 ```
 
 Sorts all files in `photos/` and its subdirectories.

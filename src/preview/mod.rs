@@ -793,7 +793,7 @@ mod tests {
 
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/DSCF1164.HEIC");
         let output_path =
-            std::env::temp_dir().join(format!("photool-preview-heic-{}.jpg", process::id()));
+            std::env::temp_dir().join(format!("stillkit-preview-heic-{}.jpg", process::id()));
         let _ = fs::remove_file(&output_path);
 
         try_generate_heic_preview_with_magick(&path, &output_path, 1000, false)
@@ -835,7 +835,7 @@ mod tests {
         let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg");
         let source = image::open(&input_path).expect("reference image should be readable");
         let output_path =
-            std::env::temp_dir().join(format!("photool-preview-full-{}.png", process::id()));
+            std::env::temp_dir().join(format!("stillkit-preview-full-{}.png", process::id()));
         let _ = fs::remove_file(&output_path);
 
         do_generate_preview(&input_path, &output_path, 10, OutputFormat::Png, true, true)
@@ -855,7 +855,7 @@ mod tests {
 
         let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg");
         let output_path =
-            std::env::temp_dir().join(format!("photool-preview-meta-{}.jpg", process::id()));
+            std::env::temp_dir().join(format!("stillkit-preview-meta-{}.jpg", process::id()));
         let _ = fs::remove_file(&output_path);
 
         do_generate_preview(
@@ -920,7 +920,7 @@ mod tests {
 
         let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg");
         let output_path =
-            std::env::temp_dir().join(format!("photool-preview-clear-meta-{}.jpg", process::id()));
+            std::env::temp_dir().join(format!("stillkit-preview-clear-meta-{}.jpg", process::id()));
         let _ = fs::remove_file(&output_path);
 
         do_generate_preview(
@@ -957,7 +957,7 @@ mod tests {
 
         let input_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/DSCF1164.HEIC");
         let output_path =
-            std::env::temp_dir().join(format!("photool-preview-heic-meta-{}.jpg", process::id()));
+            std::env::temp_dir().join(format!("stillkit-preview-heic-meta-{}.jpg", process::id()));
         let _ = fs::remove_file(&output_path);
 
         do_generate_preview(

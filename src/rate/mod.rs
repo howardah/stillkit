@@ -1047,6 +1047,6 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("photool-rate-{label}-{}-{nanos}", process::id()))
+        std::env::temp_dir().join(format!("stillkit-rate-{label}-{}-{nanos}", process::id()))
     }
 }

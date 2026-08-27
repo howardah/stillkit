@@ -10,7 +10,7 @@ fn main() {
         .about("Sort files into directories")
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand_required(false)
-        // Top-level args kept for backwards compatibility with `photool <directory>`
+        // Top-level args kept for backwards compatibility with `still <directory>`
         .arg(
             Arg::new("directory")
                 .help("The directory to sort (extension sort mode)")
