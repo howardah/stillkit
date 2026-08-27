@@ -6,11 +6,11 @@ use std::{
 };
 
 pub fn subcommand() -> Command {
-    Command::new("sort")
-        .about("Sort files into directories based on their extensions")
+    Command::new("classify")
+        .about("Classify files into directories based on their extensions")
         .arg(
             Arg::new("directory")
-                .help("The directory to sort")
+                .help("The directory to classify")
                 .required(true),
         )
         .arg(
@@ -32,7 +32,7 @@ pub fn subcommand() -> Command {
             Arg::new("recursive")
                 .short('r')
                 .long("recursive")
-                .help("Recursively sort files in subdirectories")
+                .help("Recursively classify files in subdirectories")
                 .action(ArgAction::SetTrue),
         )
 }

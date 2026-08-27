@@ -62,7 +62,7 @@ enum ExistingFileAction {
 }
 
 pub fn subcommand() -> Command {
-    Command::new("preview")
+    Command::new("previews")
         .about("Generate preview images")
         .arg(
             Arg::new("input")

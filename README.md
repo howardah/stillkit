@@ -1,7 +1,7 @@
 # stillkit
 
-A simple Rust CLI tool for sorting files into directories based on their file extensions.
-Supports custom folder names, ignored extensions, and recursive sorting.
+A simple Rust CLI tool for classifying files by extension and organizing photos by date.
+It also generates previews and provides an interactive image-rating workflow.
 
 ## Features
 
@@ -33,6 +33,17 @@ cargo run -- <directory> [options]
 
 ## Usage
 
+The explicit subcommands are:
+
+| Command | Description |
+| --- | --- |
+| `still classify <directory>` | Classify files into extension-based directories. |
+| `still organize [directory]` | Organize photos into a date-based hierarchy; defaults to the current directory. |
+| `still previews <directory>` | Generate preview images. |
+| `still rate <directory>` | Rate images in the terminal UI. |
+
+The legacy `still <directory>` form remains available for extension classification.
+
 ```sh
 still <directory> [options]
 ```
@@ -49,10 +60,10 @@ still <directory> [options]
 
 ### Examples
 
-**Basic sorting**
+**Basic classification**
 
 ```sh
-still ./photos
+still classify ./photos
 ```
 
 Moves files into folders like `JPG`, `PNG`, `MP4` based on extension.
@@ -60,7 +71,7 @@ Moves files into folders like `JPG`, `PNG`, `MP4` based on extension.
 **Custom mappings**
 
 ```sh
-still ./photos -e raf:RAW -e jpg:JPEGs
+still classify ./photos -e raf:RAW -e jpg:JPEGs
 ```
 
 Moves `.raf` files into `RAW/` and `.jpg` files into `JPEGs/`.
@@ -68,23 +79,32 @@ Moves `.raf` files into `RAW/` and `.jpg` files into `JPEGs/`.
 **Ignore some extensions**
 
 ```sh
-still ./photos --ignore heic --ignore all
+still classify ./photos --ignore heic --ignore all
 ```
 
 Skips `.heic` files or all files if `all` is specified.
 
-**Recursive sorting**
+**Recursive classification**
 
 ```sh
-still ./photos -r
+still classify ./photos -r
 ```
 
-Sorts all files in `photos/` and its subdirectories.
+Classifies all files in `photos/` and its subdirectories.
+
+**Organize photos by date**
+
+```sh
+still organize
+still organize ./photos
+```
+
+Both forms organize photos in the selected directory; the first uses the current directory.
 
 **Rate images in a TUI**
 
 ```sh
-pht rate ./photos
+still rate ./photos
 ```
 
 Browse images in a terminal UI, preview the selected image on the right, and press `0`-`5` to
@@ -93,7 +113,7 @@ rename the file with a star suffix such as `fish_★☆☆☆☆.jpg`.
 **Import ratings from another directory**
 
 ```sh
-pht rate import --from ./edited --to ./originals
+still rate import --from ./edited --to ./originals
 ```
 
 This matches files by basename while ignoring both extension and existing rating suffix, so
@@ -103,7 +123,7 @@ This matches files by basename while ignoring both extension and existing rating
 **Generate full-size previews**
 
 ```sh
-pht preview ./photos --full
+still previews ./photos --full
 ```
 
 This keeps the original image dimensions and only converts into the selected preview format.
