@@ -39,6 +39,7 @@ The explicit subcommands are:
 | --- | --- |
 | `still classify <directory>` | Classify files into extension-based directories. |
 | `still organize [directory]` | Organize photos into a date-based hierarchy; defaults to the current directory. |
+| `still exposure <inputs...>` | Adjust image exposure in photographic stops. |
 | `still previews <directory>` | Generate preview images. |
 | `still rate <directory>` | Rate images in the terminal UI. |
 
@@ -131,6 +132,29 @@ By default previews keep the source photo metadata; add `--clear-metadata` to st
 Metadata-preserving previews use `exiftool`. On macOS, HEIC/HEIF/HIF JPEG previews use Apple's
 hardware-accelerated `sips` when available, then fall back to the native Rust thumbnail path or
 ImageMagick. `--clear-metadata` uses ImageMagick so metadata stripping remains exact.
+
+**Adjust exposure**
+
+Exposure adjustments use photographic stops: `+1` doubles brightness and `-1` halves it.
+ImageMagick (`magick`) is required for the pixel conversion.
+
+```sh
+# Save beside the original as photo_+1_5.jpg
+still exposure photo.jpg --adjustment 1.5 --next-to-original
+
+# Overwrite every image in a directory
+still exposure ./photos --adjustment=-0.2 --overwrite
+
+# Apply a ramp from -1.0 to +1.0 across a sorted directory
+still exposure ./photos --start=-1 --end=1 --output ./exposed --precision 2
+
+# Keep original names in the output directory instead of adding suffixes
+still exposure ./photos --adjustment 0.5 --output ./exposed --original-names
+```
+
+Inputs may be individual files, multiple files, or directories. Use `--recursive` for nested
+directories. Ramps assign values in sorted input order and include both endpoints. The explicit
+`--overwrite` mode replaces inputs; generated files in other modes require `--force` if they already exist.
 
 For an opt-in self-contained Rust HEIC decoder, build with `cargo install --path . --features native-heic`.
 This backend is tried first and falls back to ImageMagick for unsupported files. The `heic` crate is

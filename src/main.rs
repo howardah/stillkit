@@ -1,5 +1,6 @@
 use clap::{Arg, ArgAction, Command};
 
+mod exposure;
 mod file;
 mod preview;
 mod rate;
@@ -40,6 +41,7 @@ fn cli() -> Command {
         )
         .subcommand(sort::subcommand())
         .subcommand(file::subcommand())
+        .subcommand(exposure::subcommand())
         .subcommand(preview::subcommand())
         .subcommand(rate::subcommand())
 }
@@ -50,6 +52,7 @@ fn main() {
     match matches.subcommand() {
         Some(("classify", sub_m)) => sort::run(sub_m),
         Some(("organize", sub_m)) => file::run(sub_m),
+        Some(("exposure", sub_m)) => exposure::run(sub_m),
         Some(("previews", sub_m)) => preview::run(sub_m),
         Some(("rate", sub_m)) => rate::run(sub_m),
         _ => {
@@ -83,5 +86,17 @@ mod tests {
             .try_get_matches_from(["still", "previews", "/photos"])
             .expect("previews should be a valid subcommand");
         assert_eq!(matches.subcommand_name(), Some("previews"));
+
+        let matches = cli()
+            .try_get_matches_from([
+                "still",
+                "exposure",
+                "photo.jpg",
+                "--adjustment",
+                "1.5",
+                "--next-to-original",
+            ])
+            .expect("exposure should be a valid subcommand");
+        assert_eq!(matches.subcommand_name(), Some("exposure"));
     }
 }
