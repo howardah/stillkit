@@ -1,7 +1,11 @@
 [package]
-name = "file-sort"
-version = "0.1.2"
+name = "stillkit"
+version = "0.1.11"
 edition = "2024"
+
+[[bin]]
+name = "still"
+path = "src/main.rs"
 
 [dependencies]
 clap = "4.5.45"
@@ -10,3 +14,7 @@ chrono = "0.4"
 walkdir = "2"
 indicatif = "0.18.4"
 rayon = "1.10"
+image = "0.25"
+heic = "0.1.4"
+ratatui = "0.30.0"
+crossterm = "0.29.0"

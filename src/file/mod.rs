@@ -13,7 +13,7 @@ mod ops;
 mod scan;
 
 use date::DateSource;
-use group::{cluster_by_date, PhotoFile};
+use group::{PhotoFile, cluster_by_date};
 use layout::{day_dir_name, file_subdir, is_primary, month_dir_name};
 use scan::{find_matching_dir, scan_month_dir};
 
@@ -33,7 +33,7 @@ struct ExecutionStats {
 }
 
 pub fn subcommand() -> Command {
-    Command::new("photos")
+    Command::new("file")
         .about("Organize photos into a date-based directory hierarchy")
         .arg(
             Arg::new("output")
@@ -180,10 +180,7 @@ fn import_mode(
 
         for file in month_files {
             if let Some(dir) = find_matching_dir(&existing, file.date) {
-                to_existing
-                    .entry(dir.path.clone())
-                    .or_default()
-                    .push(file);
+                to_existing.entry(dir.path.clone()).or_default().push(file);
             } else {
                 new_files.push(file);
             }
@@ -255,7 +252,11 @@ fn collect_files(dir: &Path, recursive: bool, label: &str) -> Vec<PathBuf> {
     result
 }
 
-fn extract_photo_files(paths: Vec<PathBuf>, label: &str, date_source: DateSource) -> Vec<PhotoFile> {
+fn extract_photo_files(
+    paths: Vec<PathBuf>,
+    label: &str,
+    date_source: DateSource,
+) -> Vec<PhotoFile> {
     if paths.is_empty() {
         return Vec::new();
     }
@@ -270,7 +271,10 @@ fn extract_photo_files(paths: Vec<PathBuf>, label: &str, date_source: DateSource
             match extracted {
                 Some(d) => Some(PhotoFile { path, date: d }),
                 None => {
-                    progress.println(format!("Warning: no date found for {}, skipping", path.display()));
+                    progress.println(format!(
+                        "Warning: no date found for {}, skipping",
+                        path.display()
+                    ));
                     None
                 }
             }
@@ -376,7 +380,10 @@ fn execute_plan(
 
 fn print_summary(stats: &ExecutionStats, dry_run: bool, mode: &str) {
     if dry_run {
-        println!("Dry run complete: planned {} files for {}.", stats.processed, mode);
+        println!(
+            "Dry run complete: planned {} files for {}.",
+            stats.processed, mode
+        );
         return;
     }
 
@@ -387,10 +394,7 @@ fn print_summary(stats: &ExecutionStats, dry_run: bool, mode: &str) {
 
     println!(
         "Completed {}: moved {}, skipped {}, failed {}.",
-        mode,
-        stats.moved,
-        stats.skipped,
-        stats.failed
+        mode, stats.moved, stats.skipped, stats.failed
     );
 }
 
@@ -425,9 +429,7 @@ fn display_name(path: &Path) -> String {
 }
 
 fn any_primary(files: &[PhotoFile]) -> bool {
-    files
-        .iter()
-        .any(|f| is_primary(ext_of(&f.path)))
+    files.iter().any(|f| is_primary(ext_of(&f.path)))
 }
 
 fn dir_has_primaries(dir: &Path) -> bool {

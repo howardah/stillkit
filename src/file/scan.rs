@@ -1,8 +1,8 @@
+use super::date::{DateSource, extract_date};
+use super::layout::{is_primary, is_raw};
 use chrono::NaiveDate;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use super::date::{extract_date, DateSource};
-use super::layout::{is_primary, is_raw};
 
 pub struct ExistingDir {
     pub path: PathBuf,
@@ -75,7 +75,6 @@ fn collect_dates(dir: &Path, dates: &mut HashSet<NaiveDate>, date_source: DateSo
 }
 
 pub fn find_matching_dir<'a>(dirs: &'a [ExistingDir], date: NaiveDate) -> Option<&'a ExistingDir> {
-    dirs.iter().find(|d| {
-        d.dates.contains(&date) || (d.min_date < date && date < d.max_date)
-    })
+    dirs.iter()
+        .find(|d| d.dates.contains(&date) || (d.min_date < date && date < d.max_date))
 }
