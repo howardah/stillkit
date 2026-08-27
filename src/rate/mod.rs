@@ -690,7 +690,7 @@ fn load_preview_image(
         Ok(Some(image)) => Ok(image),
         Ok(None) => preview::load_image(path),
         Err(magick_err) => preview::load_image(path).map_err(|fallback_err| {
-            format!("{magick_err}\nFallback decoder also failed: {fallback_err}")
+            return format!("{magick_err}\nFallback decoder also failed: {fallback_err}");
         }),
     }
 }
@@ -733,11 +733,11 @@ fn load_image_with_magick(
     image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
         .map(Some)
         .map_err(|e| {
-            format!(
+            return format!(
                 "Failed to decode ImageMagick output for {}: {}",
                 path.display(),
                 e
-            )
+            );
         })
 }
 
@@ -911,13 +911,13 @@ fn build_rated_file_name(stem: &str, extension: Option<&str>, rating: u8) -> Str
 
 fn rating_to_stars(rating: u8) -> String {
     let rating = rating.min(MAX_RATING);
-    format!(
+    return format!(
         "{}{}",
         FILLED_STAR.to_string().repeat(rating as usize),
         EMPTY_STAR
             .to_string()
             .repeat((MAX_RATING - rating) as usize)
-    )
+    );
 }
 
 fn panel_block<'a>(title: &'a str) -> Block<'a> {

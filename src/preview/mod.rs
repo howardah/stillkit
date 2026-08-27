@@ -473,7 +473,7 @@ pub(crate) fn is_supported_image(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| {
-            matches!(
+            return matches!(
                 ext.to_ascii_lowercase().as_str(),
                 "jpg"
                     | "jpeg"
@@ -491,7 +491,7 @@ pub(crate) fn is_supported_image(path: &Path) -> bool {
                     | "nef"
                     | "raf"
                     | "dng"
-            )
+            );
         })
         .unwrap_or(false)
 }
@@ -663,7 +663,7 @@ fn preview_size_label(max_dimension: u32, full: bool) -> String {
     if full {
         "full size".to_string()
     } else {
-        format!("max dimension: {max_dimension}")
+        return format!("max dimension: {max_dimension}");
     }
 }
 
