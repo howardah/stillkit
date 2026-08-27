@@ -4,6 +4,8 @@ use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OutputMode {
@@ -341,6 +343,102 @@ fn apply_exposure(input: &Path, output: &Path, adjustment: f64) -> Result<(), St
         ));
     }
 
+    if has_heic_extension(input) && try_apply_heic_exposure_with_sips(input, output, factor)? {
+        return Ok(());
+    }
+
+    apply_exposure_to_raster(input, output, factor)
+}
+
+fn has_heic_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "heic" | "heif" | "hif"
+            )
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn try_apply_heic_exposure_with_sips(
+    input: &Path,
+    output: &Path,
+    factor: f64,
+) -> Result<bool, String> {
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let temporary_jpeg = loop {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = std::env::temp_dir().join(format!(
+            "stillkit-exposure-{}-{counter}.jpg",
+            std::process::id()
+        ));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_) => {
+                fs::remove_file(&candidate).map_err(|error| {
+                    format!(
+                        "Failed to prepare sips temporary file {}: {error}",
+                        candidate.display()
+                    )
+                })?;
+                break candidate;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to create sips temporary file {}: {error}",
+                    candidate.display()
+                ));
+            }
+        }
+    };
+
+    let sips_output = match ProcessCommand::new("sips")
+        .arg("-s")
+        .arg("format")
+        .arg("jpeg")
+        .arg(input)
+        .arg("--out")
+        .arg(&temporary_jpeg)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "Failed to launch sips for {}: {error}",
+                input.display()
+            ));
+        }
+    };
+
+    if !sips_output.status.success() {
+        let _ = fs::remove_file(&temporary_jpeg);
+        return Ok(false);
+    }
+
+    let result = apply_exposure_to_raster(&temporary_jpeg, output, factor);
+    let _ = fs::remove_file(&temporary_jpeg);
+    result.map(|_| true)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn try_apply_heic_exposure_with_sips(
+    _input: &Path,
+    _output: &Path,
+    _factor: f64,
+) -> Result<bool, String> {
+    Ok(false)
+}
+
+fn apply_exposure_to_raster(input: &Path, output: &Path, factor: f64) -> Result<(), String> {
     let output = ProcessCommand::new("magick")
         .arg(input)
         .arg("-evaluate")

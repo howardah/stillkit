@@ -136,7 +136,9 @@ ImageMagick. `--clear-metadata` uses ImageMagick so metadata stripping remains e
 **Adjust exposure**
 
 Exposure adjustments use photographic stops: `+1` doubles brightness and `-1` halves it.
-ImageMagick (`magick`) is required for the pixel conversion.
+ImageMagick (`magick`) is required for the pixel conversion. On macOS, HEIC/HEIF/HIF inputs are
+first decoded to a temporary JPEG with `sips` when available, then adjusted with ImageMagick;
+unsupported files fall back to direct ImageMagick processing.
 
 ```sh
 # Save beside the original as photo_+1_5.jpg
