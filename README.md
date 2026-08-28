@@ -128,6 +128,7 @@ still previews ./photos --full
 ```
 
 This keeps the original image dimensions and only converts into the selected preview format.
+Use `--quality 0..100` (or `-q`) to control JPEG and WebP compression; the default is 75.
 By default previews keep the source photo metadata; add `--clear-metadata` to strip it.
 Metadata-preserving previews use `exiftool`. On macOS, HEIC/HEIF/HIF JPEG previews use Apple's
 hardware-accelerated `sips` when available, then fall back to the native Rust thumbnail path or

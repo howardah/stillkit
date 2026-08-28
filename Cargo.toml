@@ -1,6 +1,6 @@
 [package]
 name = "stillkit"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 
 [[bin]]
@@ -22,3 +22,4 @@ image = "0.25"
 heic = "0.1.4"
 ratatui = "0.30.0"
 crossterm = "0.29.0"
+webp = "0.3.1"

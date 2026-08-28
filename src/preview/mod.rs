@@ -1,5 +1,5 @@
 use clap::{Arg, ArgAction, Command};
-use image::{DynamicImage, GenericImageView, ImageFormat};
+use image::{DynamicImage, GenericImageView, ImageEncoder, ImageFormat};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::fs;
@@ -53,6 +53,7 @@ struct PreviewConfig {
     recursive: bool,
     full: bool,
     clear_metadata: bool,
+    quality: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +94,15 @@ pub fn subcommand() -> Command {
                 .help("Output format: jpg, png, or webp (defaults to jpg)")
                 .value_name("FORMAT")
                 .default_value("jpg"),
+        )
+        .arg(
+            Arg::new("quality")
+                .short('q')
+                .long("quality")
+                .help("JPEG/WebP quality from 0 (most compressed) to 100 (best quality)")
+                .value_name("QUALITY")
+                .value_parser(clap::value_parser!(u8).range(0..=100))
+                .default_value("75"),
         )
         .arg(
             Arg::new("recursive")
@@ -150,6 +160,7 @@ pub fn run(matches: &clap::ArgMatches) {
     let recursive = matches.get_flag("recursive");
     let full = matches.get_flag("full");
     let clear_metadata = matches.get_flag("clear_metadata");
+    let quality = *matches.get_one::<u8>("quality").unwrap();
 
     let config = PreviewConfig {
         input_dir: input_dir.to_path_buf(),
@@ -159,6 +170,7 @@ pub fn run(matches: &clap::ArgMatches) {
         recursive,
         full,
         clear_metadata,
+        quality,
     };
 
     if is_single_file {
@@ -184,9 +196,10 @@ pub fn run(matches: &clap::ArgMatches) {
             .ok();
 
         println!(
-            "Generating preview: {}, format: {}, output: {}",
+            "Generating preview: {}, format: {}, quality: {}, output: {}",
             preview_size_label(config.max_dimension, config.full),
             config.format.extension(),
+            config.quality,
             output_path.display()
         );
 
@@ -216,6 +229,7 @@ pub fn run(matches: &clap::ArgMatches) {
             config.format,
             config.full,
             config.clear_metadata,
+            config.quality,
         ) {
             Ok(_) => {
                 progress.inc(1);
@@ -277,10 +291,11 @@ fn generate_previews(config: &PreviewConfig) {
     }
 
     println!(
-        "Generating previews: {} images, {}, format: {}, output: {}",
+        "Generating previews: {} images, {}, format: {}, quality: {}, output: {}",
         image_paths.len(),
         preview_size_label(config.max_dimension, config.full),
         config.format.extension(),
+        config.quality,
         config.output_dir.display()
     );
 
@@ -326,6 +341,7 @@ fn generate_previews(config: &PreviewConfig) {
                     config.format,
                     config.full,
                     config.clear_metadata,
+                    config.quality,
                 )
                 .map(|_| output_path);
                 progress.inc(1);
@@ -458,6 +474,7 @@ fn do_generate_preview(
     format: OutputFormat,
     full: bool,
     clear_metadata: bool,
+    quality: u8,
 ) -> Result<(), String> {
     let orientation_normalized = generate_preview_image(
         input_path,
@@ -466,6 +483,7 @@ fn do_generate_preview(
         format,
         full,
         clear_metadata,
+        quality,
     )?;
 
     if !clear_metadata {
@@ -520,6 +538,7 @@ fn generate_preview_image(
     format: OutputFormat,
     full: bool,
     clear_metadata: bool,
+    quality: u8,
 ) -> Result<bool, String> {
     if has_heic_extension(input_path) {
         // macOS's ImageIO-backed `sips` can use Apple's hardware-accelerated
@@ -532,6 +551,7 @@ fn generate_preview_image(
                 max_dimension,
                 format,
                 full,
+                quality,
             )?
         {
             return Ok(true);
@@ -547,6 +567,7 @@ fn generate_preview_image(
             max_dimension,
             format,
             full,
+            quality,
         )
         .is_ok()
         {
@@ -555,7 +576,13 @@ fn generate_preview_image(
 
         // HEIC-family files benefit from ImageMagick's decoder and auto-orientation
         // when available. This is also the compatibility fallback for the native path.
-        if try_generate_heic_preview_with_magick(input_path, output_path, max_dimension, full)? {
+        if try_generate_heic_preview_with_magick(
+            input_path,
+            output_path,
+            max_dimension,
+            full,
+            quality,
+        )? {
             return Ok(true);
         }
     }
@@ -575,9 +602,7 @@ fn generate_preview_image(
         }
     };
 
-    let mut bytes = Vec::new();
-    resized
-        .write_to(&mut Cursor::new(&mut bytes), format.to_format())
+    let bytes = encode_image(&resized, format, quality)
         .map_err(|e| format!("Failed to encode image {}: {}", input_path.display(), e))?;
 
     fs::write(output_path, &bytes).map_err(|e| {
@@ -591,6 +616,41 @@ fn generate_preview_image(
     Ok(false)
 }
 
+fn encode_image(
+    image: &DynamicImage,
+    format: OutputFormat,
+    quality: u8,
+) -> image::ImageResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    match format {
+        OutputFormat::Jpeg => {
+            // The JPEG encoder's meaningful range starts at 1; quality 0 maps to
+            // its strongest compression setting while preserving the CLI's 0-100 scale.
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality.max(1))
+                .write_image(
+                    image.as_bytes(),
+                    image.width(),
+                    image.height(),
+                    image.color().into(),
+                )?;
+        }
+        OutputFormat::WebP => {
+            bytes.extend_from_slice(
+                &webp::Encoder::from_image(image)
+                    .map_err(|error| {
+                        image::ImageError::Encoding(image::error::EncodingError::new(
+                            image::error::ImageFormatHint::Name("WebP".into()),
+                            error,
+                        ))
+                    })?
+                    .encode(quality as f32),
+            );
+        }
+        OutputFormat::Png => image.write_to(&mut Cursor::new(&mut bytes), format.to_format())?,
+    }
+    Ok(bytes)
+}
+
 #[cfg(target_os = "macos")]
 fn try_generate_heic_preview_with_sips(
     input_path: &Path,
@@ -598,6 +658,7 @@ fn try_generate_heic_preview_with_sips(
     max_dimension: u32,
     format: OutputFormat,
     full: bool,
+    quality: u8,
 ) -> Result<bool, String> {
     // sips supports JPEG, PNG, and several Apple image formats, but not WebP.
     // Restricting this fast path to JPEG keeps the output-format contract clear.
@@ -607,6 +668,10 @@ fn try_generate_heic_preview_with_sips(
 
     let mut command = ProcessCommand::new("sips");
     command.arg("-s").arg("format").arg("jpeg");
+    command
+        .arg("-s")
+        .arg("formatOptions")
+        .arg(quality.max(1).to_string());
 
     if !full {
         command
@@ -643,6 +708,7 @@ fn try_generate_heic_preview_with_sips(
     _max_dimension: u32,
     _format: OutputFormat,
     _full: bool,
+    _quality: u8,
 ) -> Result<bool, String> {
     Ok(false)
 }
@@ -654,6 +720,7 @@ fn try_generate_heic_preview_with_native(
     max_dimension: u32,
     format: OutputFormat,
     full: bool,
+    quality: u8,
 ) -> Result<(), String> {
     use heic::{DecoderConfig, PixelLayout};
 
@@ -708,22 +775,20 @@ fn try_generate_heic_preview_with_native(
         image
     };
 
-    let mut file = fs::File::create(output_path).map_err(|e| {
+    let bytes = encode_image(&resized, format, quality).map_err(|e| {
         format!(
-            "Failed to create output file {}: {}",
+            "Failed to encode native HEIC preview {}: {}",
+            input_path.display(),
+            e
+        )
+    })?;
+    fs::write(output_path, bytes).map_err(|e| {
+        format!(
+            "Failed to write native HEIC preview {}: {}",
             output_path.display(),
             e
         )
     })?;
-    resized
-        .write_to(&mut file, format.to_format())
-        .map_err(|e| {
-            format!(
-                "Failed to encode native HEIC preview {}: {}",
-                input_path.display(),
-                e
-            )
-        })?;
 
     Ok(())
 }
@@ -740,6 +805,7 @@ fn try_generate_heic_preview_with_magick(
     output_path: &Path,
     max_dimension: u32,
     full: bool,
+    quality: u8,
 ) -> Result<bool, String> {
     let mut command = ProcessCommand::new("magick");
     command.arg(input_path).arg("-auto-orient").arg("-strip");
@@ -750,7 +816,12 @@ fn try_generate_heic_preview_with_magick(
             .arg(format!("{max_dimension}x{max_dimension}>"));
     }
 
-    let output = match command.arg(output_path).output() {
+    let output = match command
+        .arg("-quality")
+        .arg(quality.max(1).to_string())
+        .arg(output_path)
+        .output()
+    {
         Ok(output) => output,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => {
@@ -955,6 +1026,36 @@ mod tests {
     }
 
     #[test]
+    fn quality_argument_accepts_only_zero_through_one_hundred() {
+        let matches = subcommand()
+            .try_get_matches_from(["previews", "--quality", "0"])
+            .expect("zero should be a valid quality");
+        assert_eq!(matches.get_one::<u8>("quality"), Some(&0));
+
+        assert!(
+            subcommand()
+                .try_get_matches_from(["previews", "--quality", "101"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn quality_controls_jpeg_and_webp_compression() {
+        let image = image::open(Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg"))
+            .expect("reference image should be readable");
+
+        for format in [OutputFormat::Jpeg, OutputFormat::WebP] {
+            let compressed = encode_image(&image, format, 0).expect("encoding should succeed");
+            let high_quality = encode_image(&image, format, 100).expect("encoding should succeed");
+            assert!(
+                compressed.len() < high_quality.len(),
+                "quality should affect {} output size",
+                format.extension()
+            );
+        }
+    }
+
+    #[test]
     fn supports_hif_as_heic_family_image() {
         assert!(is_supported_image(Path::new("photo.hif")));
         assert!(is_supported_image(Path::new("photo.HIF")));
@@ -972,7 +1073,7 @@ mod tests {
             std::env::temp_dir().join(format!("stillkit-preview-heic-{}.jpg", process::id()));
         let _ = fs::remove_file(&output_path);
 
-        try_generate_heic_preview_with_magick(&path, &output_path, 1000, false)
+        try_generate_heic_preview_with_magick(&path, &output_path, 1000, false, 75)
             .expect("ImageMagick HEIC preview should succeed");
 
         let image = image::open(&output_path).expect("generated preview should be readable");
@@ -1015,6 +1116,7 @@ mod tests {
             1000,
             OutputFormat::Jpeg,
             false,
+            75,
         )
         .expect("native HEIC preview should succeed");
 
@@ -1038,8 +1140,16 @@ mod tests {
             std::env::temp_dir().join(format!("stillkit-preview-full-{}.png", process::id()));
         let _ = fs::remove_file(&output_path);
 
-        do_generate_preview(&input_path, &output_path, 10, OutputFormat::Png, true, true)
-            .expect("full preview generation should succeed");
+        do_generate_preview(
+            &input_path,
+            &output_path,
+            10,
+            OutputFormat::Png,
+            true,
+            true,
+            75,
+        )
+        .expect("full preview generation should succeed");
 
         let output = image::open(&output_path).expect("generated image should be readable");
         assert_eq!(output.dimensions(), source.dimensions());
@@ -1065,6 +1175,7 @@ mod tests {
             OutputFormat::Jpeg,
             false,
             false,
+            75,
         )
         .expect("metadata-preserving preview generation should succeed");
 
@@ -1130,6 +1241,7 @@ mod tests {
             OutputFormat::Jpeg,
             false,
             true,
+            75,
         )
         .expect("metadata-cleared preview generation should succeed");
 
@@ -1167,6 +1279,7 @@ mod tests {
             OutputFormat::Jpeg,
             false,
             false,
+            75,
         )
         .expect("HEIC preview generation should succeed");
 
