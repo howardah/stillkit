@@ -1,10 +1,9 @@
 use clap::{Arg, ArgAction, Command};
 
-mod exposure;
-mod file;
-mod preview;
-mod rate;
-mod sort;
+mod commands;
+mod shared;
+
+use commands::{classify, exposure, organize, previews, rate};
 
 fn cli() -> Command {
     Command::new("pht")
@@ -39,10 +38,10 @@ fn cli() -> Command {
                 .help("Recursively classify files in subdirectories")
                 .action(ArgAction::SetTrue),
         )
-        .subcommand(sort::subcommand())
-        .subcommand(file::subcommand())
+        .subcommand(classify::subcommand())
+        .subcommand(organize::subcommand())
         .subcommand(exposure::subcommand())
-        .subcommand(preview::subcommand())
+        .subcommand(previews::subcommand())
         .subcommand(rate::subcommand())
 }
 
@@ -50,14 +49,14 @@ fn main() {
     let matches = cli().get_matches();
 
     match matches.subcommand() {
-        Some(("classify", sub_m)) => sort::run(sub_m),
-        Some(("organize", sub_m)) => file::run(sub_m),
+        Some(("classify", sub_m)) => classify::run(sub_m),
+        Some(("organize", sub_m)) => organize::run(sub_m),
         Some(("exposure", sub_m)) => exposure::run(sub_m),
-        Some(("previews", sub_m)) => preview::run(sub_m),
+        Some(("previews", sub_m)) => previews::run(sub_m),
         Some(("rate", sub_m)) => rate::run(sub_m),
         _ => {
             if matches.get_one::<String>("directory").is_some() {
-                sort::run(&matches);
+                classify::run(&matches);
             } else {
                 eprintln!("No command or directory specified. Use --help for usage.");
                 std::process::exit(1);

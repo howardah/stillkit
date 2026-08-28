@@ -65,16 +65,16 @@ fn collect_dates(dir: &Path, dates: &mut HashSet<NaiveDate>, date_source: DateSo
         let path = entry.path();
         if path.is_file() {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if is_primary(ext) || is_raw(ext) {
-                if let Some(date) = extract_date(&path, date_source) {
-                    dates.insert(date);
-                }
+            if (is_primary(ext) || is_raw(ext))
+                && let Some(date) = extract_date(&path, date_source)
+            {
+                dates.insert(date);
             }
         }
     }
 }
 
-pub fn find_matching_dir<'a>(dirs: &'a [ExistingDir], date: NaiveDate) -> Option<&'a ExistingDir> {
+pub fn find_matching_dir(dirs: &[ExistingDir], date: NaiveDate) -> Option<&ExistingDir> {
     dirs.iter()
         .find(|d| d.dates.contains(&date) || (d.min_date < date && date < d.max_date))
 }

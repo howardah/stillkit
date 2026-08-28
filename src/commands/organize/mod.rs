@@ -11,6 +11,8 @@ mod group;
 mod layout;
 mod ops;
 mod scan;
+#[cfg(test)]
+mod tests;
 
 use date::DateSource;
 use group::{PhotoFile, cluster_by_date};
@@ -74,33 +76,6 @@ pub fn subcommand() -> Command {
                 .help("Use filesystem modified dates instead of EXIF metadata")
                 .action(ArgAction::SetTrue),
         )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::subcommand;
-
-    #[test]
-    fn organize_command_accepts_no_directory() {
-        let matches = subcommand()
-            .try_get_matches_from(["organize"])
-            .expect("organize should be usable without a directory");
-
-        assert!(matches.get_one::<String>("output").is_none());
-        assert!(matches.get_one::<String>("input").is_none());
-    }
-
-    #[test]
-    fn organize_command_accepts_directory_path() {
-        let matches = subcommand()
-            .try_get_matches_from(["organize", "/photos"])
-            .expect("organize should accept a directory path");
-
-        assert_eq!(
-            matches.get_one::<String>("output").map(String::as_str),
-            Some("/photos")
-        );
-    }
 }
 
 pub fn run(matches: &ArgMatches) {
@@ -347,30 +322,29 @@ fn execute_plan(
             let file_name = file.path.file_name().unwrap();
             let dest_path = dest_dir.join(file_name);
 
-            if batch.check_duplicates && dest_path.exists() {
-                if let Some(existing_date) = date::extract_date(&dest_path, date_source) {
-                    if existing_date == file.date {
-                        stats.processed += 1;
-                        stats.skipped += 1;
+            if batch.check_duplicates
+                && dest_path.exists()
+                && date::extract_date(&dest_path, date_source) == Some(file.date)
+            {
+                stats.processed += 1;
+                stats.skipped += 1;
 
-                        if dry_run {
-                            println!(
-                                "[DRY RUN] Would skip:\n  {}  (same name and date found in {})\n",
-                                file.path.display(),
-                                display_name(&batch.dest_root)
-                            );
-                        } else if let Some(progress) = progress.as_ref() {
-                            progress.println(format!(
-                                "[SKIP] {}  (same name and date found in {})",
-                                file.path.display(),
-                                display_name(&batch.dest_root)
-                            ));
-                            progress.inc(1);
-                        }
-
-                        continue;
-                    }
+                if dry_run {
+                    println!(
+                        "[DRY RUN] Would skip:\n  {}  (same name and date found in {})\n",
+                        file.path.display(),
+                        display_name(&batch.dest_root)
+                    );
+                } else if let Some(progress) = progress.as_ref() {
+                    progress.println(format!(
+                        "[SKIP] {}  (same name and date found in {})",
+                        file.path.display(),
+                        display_name(&batch.dest_root)
+                    ));
+                    progress.inc(1);
                 }
+
+                continue;
             }
 
             if dry_run {

@@ -1,3 +1,4 @@
+use crate::shared::image::{is_heic_family, is_supported_image};
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -215,19 +216,19 @@ fn collect_images(inputs: &[PathBuf], recursive: bool) -> Vec<PathBuf> {
     let mut images = Vec::new();
     for input in inputs {
         if input.is_file() {
-            if crate::preview::is_supported_image(input) {
+            if is_supported_image(input) {
                 images.push(input.clone());
             }
         } else if input.is_dir() {
             if recursive {
                 for entry in walkdir::WalkDir::new(input).into_iter().flatten() {
-                    if entry.path().is_file() && crate::preview::is_supported_image(entry.path()) {
+                    if entry.path().is_file() && is_supported_image(entry.path()) {
                         images.push(entry.path().to_path_buf());
                     }
                 }
             } else if let Ok(entries) = fs::read_dir(input) {
                 for entry in entries.flatten() {
-                    if entry.path().is_file() && crate::preview::is_supported_image(&entry.path()) {
+                    if entry.path().is_file() && is_supported_image(&entry.path()) {
                         images.push(entry.path());
                     }
                 }
@@ -292,10 +293,10 @@ fn output_path(
 
 fn common_relative_path(input: &Path, inputs: &[PathBuf]) -> PathBuf {
     for root in inputs {
-        if root.is_dir() {
-            if let Ok(relative) = input.strip_prefix(root) {
-                return relative.to_path_buf();
-            }
+        if root.is_dir()
+            && let Ok(relative) = input.strip_prefix(root)
+        {
+            return relative.to_path_buf();
         }
     }
     input
@@ -343,23 +344,11 @@ fn apply_exposure(input: &Path, output: &Path, adjustment: f64) -> Result<(), St
         ));
     }
 
-    if has_heic_extension(input) && try_apply_heic_exposure_with_sips(input, output, factor)? {
+    if is_heic_family(input) && try_apply_heic_exposure_with_sips(input, output, factor)? {
         return Ok(());
     }
 
     apply_exposure_to_raster(input, output, factor)
-}
-
-fn has_heic_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "heic" | "heif" | "hif"
-            )
-        })
-        .unwrap_or(false)
 }
 
 #[cfg(target_os = "macos")]
