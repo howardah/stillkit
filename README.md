@@ -1,7 +1,7 @@
 # stillkit
 
-A simple Rust CLI tool for sorting files into directories based on their file extensions.
-Supports custom folder names, ignored extensions, and recursive sorting.
+A simple Rust CLI tool for classifying files by extension and organizing photos by date.
+It also generates previews and provides an interactive image-rating workflow.
 
 ## Features
 
@@ -33,6 +33,18 @@ cargo run -- <directory> [options]
 
 ## Usage
 
+The explicit subcommands are:
+
+| Command | Description |
+| --- | --- |
+| `still classify <directory>` | Classify files into extension-based directories. |
+| `still organize [directory]` | Organize photos into a date-based hierarchy; defaults to the current directory. |
+| `still exposure <inputs...>` | Adjust image exposure in photographic stops. |
+| `still previews <directory>` | Generate preview images. |
+| `still rate <directory>` | Rate images in the terminal UI. |
+
+The legacy `still <directory>` form remains available for extension classification.
+
 ```sh
 still <directory> [options]
 ```
@@ -49,10 +61,10 @@ still <directory> [options]
 
 ### Examples
 
-**Basic sorting**
+**Basic classification**
 
 ```sh
-still ./photos
+still classify ./photos
 ```
 
 Moves files into folders like `JPG`, `PNG`, `MP4` based on extension.
@@ -60,7 +72,7 @@ Moves files into folders like `JPG`, `PNG`, `MP4` based on extension.
 **Custom mappings**
 
 ```sh
-still ./photos -e raf:RAW -e jpg:JPEGs
+still classify ./photos -e raf:RAW -e jpg:JPEGs
 ```
 
 Moves `.raf` files into `RAW/` and `.jpg` files into `JPEGs/`.
@@ -68,23 +80,32 @@ Moves `.raf` files into `RAW/` and `.jpg` files into `JPEGs/`.
 **Ignore some extensions**
 
 ```sh
-still ./photos --ignore heic --ignore all
+still classify ./photos --ignore heic --ignore all
 ```
 
 Skips `.heic` files or all files if `all` is specified.
 
-**Recursive sorting**
+**Recursive classification**
 
 ```sh
-still ./photos -r
+still classify ./photos -r
 ```
 
-Sorts all files in `photos/` and its subdirectories.
+Classifies all files in `photos/` and its subdirectories.
+
+**Organize photos by date**
+
+```sh
+still organize
+still organize ./photos
+```
+
+Both forms organize photos in the selected directory; the first uses the current directory.
 
 **Rate images in a TUI**
 
 ```sh
-pht rate ./photos
+still rate ./photos
 ```
 
 Browse images in a terminal UI, preview the selected image on the right, and press `0`-`5` to
@@ -93,7 +114,7 @@ rename the file with a star suffix such as `fish_★☆☆☆☆.jpg`.
 **Import ratings from another directory**
 
 ```sh
-pht rate import --from ./edited --to ./originals
+still rate import --from ./edited --to ./originals
 ```
 
 This matches files by basename while ignoring both extension and existing rating suffix, so
@@ -103,12 +124,47 @@ This matches files by basename while ignoring both extension and existing rating
 **Generate full-size previews**
 
 ```sh
-pht preview ./photos --full
+still previews ./photos --full
 ```
 
 This keeps the original image dimensions and only converts into the selected preview format.
 By default previews keep the source photo metadata; add `--clear-metadata` to strip it.
-Metadata-preserving previews use `exiftool`, and HEIC/HEIF/HIF previews use ImageMagick's `magick` when available.
+Metadata-preserving previews use `exiftool`. On macOS, HEIC/HEIF/HIF JPEG previews use Apple's
+hardware-accelerated `sips` when available, then fall back to the native Rust thumbnail path or
+ImageMagick. `--clear-metadata` uses ImageMagick so metadata stripping remains exact.
+
+**Adjust exposure**
+
+Exposure adjustments use photographic stops: `+1` doubles brightness and `-1` halves it.
+ImageMagick (`magick`) is required for the pixel conversion. On macOS, HEIC/HEIF/HIF inputs are
+first decoded to a temporary JPEG with `sips` when available, then adjusted with ImageMagick;
+unsupported files fall back to direct ImageMagick processing.
+
+```sh
+# Save beside the original as photo_+1_5.jpg
+still exposure photo.jpg --adjustment 1.5 --next-to-original
+
+# Overwrite every image in a directory
+still exposure ./photos --adjustment=-0.2 --overwrite
+
+# Apply a ramp from -1.0 to +1.0 across a sorted directory
+still exposure ./photos --start=-1 --end=1 --output ./exposed --precision 2
+
+# Keep original names in the output directory instead of adding suffixes
+still exposure ./photos --adjustment 0.5 --output ./exposed --original-names
+```
+
+Inputs may be individual files, multiple files, or directories. Use `--recursive` for nested
+directories. Ramps assign values in sorted input order and include both endpoints. The explicit
+`--overwrite` mode replaces inputs; generated files in other modes require `--force` if they already exist.
+
+For an opt-in self-contained Rust HEIC decoder, build with `cargo install --path . --features native-heic`.
+This backend is tried first and falls back to ImageMagick for unsupported files. The `heic` crate is
+AGPL-or-commercial licensed, so review that license before distributing binaries built with this feature.
+
+The Rust decoder uses CPU SIMD, not Apple hardware HEVC decoding. Hardware acceleration for the
+Rust path would require a separate VideoToolbox backend with platform FFI and additional codec and
+distribution considerations; `sips` is the supported accelerated path on macOS for now.
 
 ## Notes
 

@@ -1,8 +1,8 @@
-# `photos` Subcommand — Implementation Plan
+# `organize` Subcommand — Implementation Plan
 
 ## Overview
 
-The `photos` subcommand automates organizing camera photos into a date-based directory hierarchy. It has two modes depending on whether an input (`-i`) is supplied:
+The `organize` subcommand automates organizing camera photos into a date-based directory hierarchy. It has two modes depending on whether an input (`-i`) is supplied:
 
 - **Sort mode** (no input): reorganize photos already sitting in the root of the output directory.
 - **Import mode** (with input): move photos from an input directory into the output, merging with any existing structure.
@@ -12,7 +12,7 @@ The `photos` subcommand automates organizing camera photos into a date-based dir
 ## CLI Shape
 
 ```
-still photos [OUTPUT] [-o OUTPUT] [-i INPUT] [-r] [--dry-run]
+still organize [OUTPUT] [-o OUTPUT] [-i INPUT] [-r] [--dry-run]
 ```
 
 | Argument              | Description                                                                                                 |
@@ -23,7 +23,7 @@ still photos [OUTPUT] [-o OUTPUT] [-i INPUT] [-r] [--dry-run]
 | `-r` / `--recursive`  | Recurse into subdirectories of the input. Without this flag only the top level of the input dir is scanned. |
 | `--dry-run`           | Print intended actions; do not move or create anything.                                                     |
 
-The existing extension-based sorter remains the default `still <directory>` invocation for backwards compatibility. A `sort` subcommand alias is also added so `still sort <directory>` works identically.
+The existing extension-based classifier remains available through the legacy `still <directory>` invocation for backwards compatibility. The preferred explicit form is `still classify <directory>`.
 
 ---
 
@@ -425,10 +425,10 @@ The gap from March 31 → April 1 crosses a month boundary, so they produce sepa
 
 ```
 src/
-  main.rs          — CLI definition and dispatch (adds `photos` + `sort` alias)
+  main.rs          — CLI definition and dispatch (`classify`, `organize`, and `previews`)
   sort.rs          — existing extension-sorter logic (extracted from main.rs)
-  photos/
-    mod.rs         — entry point: parse args, call sort or import
+  file/
+    mod.rs         — `organize` entry point: parse args, call sort or import
     date.rs        — EXIF date extraction helpers
     group.rs       — date cluster logic (gap ≤ 2 days, per-month)
     layout.rs      — month/day dir naming, file placement routing
