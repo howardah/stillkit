@@ -1,10 +1,6 @@
 use ::image::ImageFormat;
 use clap::{Arg, ArgAction, Command};
-use indicatif::{ProgressBar, ProgressStyle};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 mod batch;
 mod image;
@@ -12,7 +8,7 @@ use crate::shared::{Pipeline, decoding as raw};
 #[cfg(test)]
 mod tests;
 
-use batch::{generate_previews, preview_size_label, prompt_existing_file_action};
+use batch::generate_previews;
 use image::PreviewOptions;
 
 /// Supported output image formats
@@ -53,7 +49,7 @@ impl OutputFormat {
 
 /// Configuration for preview generation
 struct PreviewConfig {
-    input_dir: PathBuf,
+    inputs: PreviewInputs,
     output_dir: PathBuf,
     max_dimension: u32,
     format: OutputFormat,
@@ -62,6 +58,11 @@ struct PreviewConfig {
     clear_metadata: bool,
     quality: u8,
     pipeline: Pipeline,
+}
+
+enum PreviewInputs {
+    Directory(PathBuf),
+    Files(Vec<PathBuf>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,9 +95,10 @@ pub fn subcommand() -> Command {
         )
         .arg(
             Arg::new("input")
-                .help("Input directory to process (defaults to current directory)")
+                .help("Input directory or one or more image files (defaults to current directory)")
                 .index(1)
-                .value_name("INPUT_DIR"),
+                .value_name("INPUT")
+                .num_args(1..),
         )
         .arg(
             Arg::new("output")
@@ -153,27 +155,29 @@ pub fn subcommand() -> Command {
 }
 
 pub fn run(matches: &clap::ArgMatches) {
-    let input_path = matches
-        .get_one::<String>("input")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().expect("Cannot determine current directory"));
+    let input_paths: Vec<PathBuf> = matches
+        .get_many::<String>("input")
+        .map(|values| values.map(PathBuf::from).collect())
+        .unwrap_or_else(|| {
+            vec![std::env::current_dir().expect("Cannot determine current directory")]
+        });
 
     let output_dir_name = matches.get_one::<String>("output").unwrap();
 
-    // Determine input type and output directory
-    let (input_dir, output_dir, is_single_file) = if input_path.is_file() {
-        let output_dir = input_path
+    let (inputs, output_dir) = if input_paths.len() == 1 && input_paths[0].is_dir() {
+        let input_dir = input_paths.into_iter().next().unwrap();
+        let output_dir = input_dir.join(output_dir_name);
+        (PreviewInputs::Directory(input_dir), output_dir)
+    } else {
+        if let Some(path) = input_paths.iter().find(|path| !path.is_file()) {
+            eprintln!("Input image is not a file: {}", path.display());
+            return;
+        }
+        let output_dir = input_paths[0]
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(output_dir_name);
-        (
-            input_path.parent().unwrap_or_else(|| Path::new(".")),
-            output_dir,
-            true,
-        )
-    } else {
-        let output_dir = input_path.join(output_dir_name);
-        (input_path.as_path(), output_dir, false)
+        (PreviewInputs::Files(input_paths), output_dir)
     };
 
     let max_dimension: u32 = matches
@@ -190,7 +194,7 @@ pub fn run(matches: &clap::ArgMatches) {
     let quality = *matches.get_one::<u8>("quality").unwrap();
 
     let config = PreviewConfig {
-        input_dir: input_dir.to_path_buf(),
+        inputs,
         output_dir,
         max_dimension,
         format,
@@ -201,67 +205,5 @@ pub fn run(matches: &clap::ArgMatches) {
         pipeline: Pipeline::from_no_deps(matches.get_flag("no-deps")),
     };
 
-    if is_single_file {
-        // Handle single file directly
-        let input_file = input_path;
-        let relative_path = input_file
-            .file_name()
-            .unwrap_or_else(|| input_file.as_os_str());
-        let output_path = config
-            .output_dir
-            .join(relative_path)
-            .with_extension(config.format.extension());
-
-        // Create output directory
-        fs::create_dir_all(&config.output_dir)
-            .map_err(|e| {
-                eprintln!(
-                    "Error creating directory {}: {}",
-                    config.output_dir.display(),
-                    e
-                )
-            })
-            .ok();
-
-        println!(
-            "Generating preview: {}, format: {}, quality: {}, output: {}",
-            preview_size_label(config.max_dimension, config.full),
-            config.format.extension(),
-            config.quality,
-            output_path.display()
-        );
-
-        let progress = ProgressBar::new(1);
-        progress.set_style(
-            ProgressStyle::with_template(
-                "{spinner:.green} {msg} [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
-            )
-            .expect("valid progress template")
-            .progress_chars("=> "),
-        );
-        progress.set_message("Generating preview");
-
-        if output_path.exists()
-            && matches!(prompt_existing_file_action(1), ExistingFileAction::Skip)
-        {
-            progress.inc(1);
-            progress.finish_with_message("Skipped existing preview");
-            println!("Skipped existing file: {}", output_path.display());
-            return;
-        }
-
-        match image::generate_preview(&input_file, &output_path, config.image_options()) {
-            Ok(_) => {
-                progress.inc(1);
-                progress.finish_with_message("Generated 1 preview");
-            }
-            Err(e) => {
-                progress.inc(1);
-                progress.finish_with_message("Failed");
-                eprintln!("Error: {}", e);
-            }
-        }
-    } else {
-        generate_previews(&config);
-    }
+    generate_previews(&config);
 }

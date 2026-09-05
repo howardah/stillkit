@@ -1,5 +1,5 @@
 use super::image::generate_preview;
-use super::{ExistingFileAction, PreviewConfig};
+use super::{ExistingFileAction, PreviewConfig, PreviewInputs};
 use crate::shared::image::is_supported_image;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -13,7 +13,10 @@ use std::{
 /// Generate preview images based on configuration
 pub(super) fn generate_previews(config: &PreviewConfig) {
     // Collect all image files
-    let image_paths = collect_image_files(&config.input_dir, config.recursive);
+    let image_paths = match &config.inputs {
+        PreviewInputs::Directory(dir) => collect_image_files(dir, config.recursive),
+        PreviewInputs::Files(paths) => paths.clone(),
+    };
 
     // RAW+JPEG pairs commonly share a stem. Never let parallel conversions race
     // to overwrite the same destination, even when it does not exist yet.
@@ -32,7 +35,11 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
     }
 
     if image_paths.is_empty() {
-        println!("No image files found in {}.", config.input_dir.display());
+        let input_dir = match &config.inputs {
+            PreviewInputs::Directory(dir) => dir,
+            PreviewInputs::Files(_) => unreachable!("file input cannot be empty"),
+        };
+        println!("No image files found in {}.", input_dir.display());
         return;
     }
 
@@ -96,7 +103,7 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
         .map_init(
             || progress.clone(),
             |progress, path| {
-                let relative_path = path.strip_prefix(&config.input_dir).unwrap_or(path);
+                let relative_path = relative_input_path(config, path);
                 let mut output_path = config.output_dir.join(relative_path);
 
                 // Create parent directories
@@ -154,13 +161,18 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
 }
 
 fn preview_output_path(config: &PreviewConfig, input_path: &Path) -> PathBuf {
-    let relative_path = input_path
-        .strip_prefix(&config.input_dir)
-        .unwrap_or(input_path);
+    let relative_path = relative_input_path(config, input_path);
     config
         .output_dir
         .join(relative_path)
         .with_extension(config.format.extension())
+}
+
+fn relative_input_path<'a>(config: &'a PreviewConfig, input_path: &'a Path) -> &'a Path {
+    match &config.inputs {
+        PreviewInputs::Directory(dir) => input_path.strip_prefix(dir).unwrap_or(input_path),
+        PreviewInputs::Files(_) => input_path.file_name().map(Path::new).unwrap_or(input_path),
+    }
 }
 
 pub(super) fn prompt_existing_file_action(existing_count: usize) -> ExistingFileAction {
@@ -265,7 +277,7 @@ mod tests {
         fs::write(directory.join("photo.CR2"), b"original raw").unwrap();
         fs::write(directory.join("photo.jpg"), b"original jpeg").unwrap();
         let config = PreviewConfig {
-            input_dir: directory.clone(),
+            inputs: PreviewInputs::Directory(directory.clone()),
             output_dir: directory.join("output"),
             max_dimension: 1000,
             format: super::super::OutputFormat::Jpeg,

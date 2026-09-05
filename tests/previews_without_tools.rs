@@ -45,6 +45,37 @@ fn preview(input: &Path, output: &Path, format: &str, flags: &[&str]) -> PathBuf
 }
 
 #[test]
+fn multiple_images_default_to_preview_beside_the_first_input() {
+    let dir = TestDir::new();
+    let first_dir = dir.0.join("first");
+    let second_dir = dir.0.join("second");
+    fs::create_dir_all(&first_dir).unwrap();
+    fs::create_dir_all(&second_dir).unwrap();
+    let first = first_dir.join("one.jpg");
+    let second = second_dir.join("two.jpg");
+    DynamicImage::new_rgb8(8, 6).save(&first).unwrap();
+    DynamicImage::new_rgb8(6, 8).save(&second).unwrap();
+
+    let result = Command::new(env!("CARGO_BIN_EXE_still"))
+        .env("PATH", "")
+        .args(["previews", "--no-deps", "--clear-metadata"])
+        .arg(&first)
+        .arg(&second)
+        .output()
+        .unwrap();
+
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let output = first_dir.join("preview");
+    assert!(output.join("one.jpg").is_file());
+    assert!(output.join("two.jpg").is_file());
+    assert!(!second_dir.join("preview").exists());
+}
+
+#[test]
 fn develops_raw_sensor_pixels_without_external_tools_or_embedded_jpeg() {
     let dir = TestDir::new();
     let input = dir.0.join("camera.DNG");

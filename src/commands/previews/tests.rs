@@ -23,6 +23,19 @@ fn no_deps_is_optional_for_previews() {
     assert!(native.get_flag("no-deps"));
 }
 
+#[test]
+fn accepts_multiple_image_inputs() {
+    let matches = subcommand()
+        .try_get_matches_from(["previews", "one.jpg", "two.CR2", "three.png"])
+        .expect("multiple image paths should be valid inputs");
+    let inputs: Vec<_> = matches
+        .get_many::<String>("input")
+        .unwrap()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(inputs, ["one.jpg", "two.CR2", "three.png"]);
+}
+
 fn magick_available() -> bool {
     ProcessCommand::new("magick")
         .arg("-version")

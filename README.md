@@ -40,7 +40,7 @@ The explicit subcommands are:
 | `still classify <directory>` | Classify files into extension-based directories. |
 | `still organize [directory]` | Organize photos into a date-based hierarchy; defaults to the current directory. |
 | `still exposure <inputs...>` | Adjust image exposure in photographic stops. |
-| `still previews <directory>` | Generate preview images. |
+| `still previews [directory | images...]` | Generate preview images. |
 | `still rate <directory>` | Rate images in the terminal UI. |
 
 The legacy `still <directory>` form remains available for extension classification.
@@ -126,6 +126,16 @@ This matches files by basename while ignoring both extension and existing rating
 ```sh
 still previews ./photos --full
 ```
+
+Pass one or more image paths to preview selected files instead of scanning a directory:
+
+```sh
+still previews ./photos/one.jpg ./edited/two.CR2
+```
+
+For image inputs, the default output is a `preview` directory beside the first image. Files from
+other directories are placed in that same output directory. Use `--output` to choose another
+location. Directory input continues to default to `<directory>/preview`.
 
 This keeps the original image dimensions and only converts into the selected preview format.
 Use `--quality 0..100` (or `-q`) to control JPEG and WebP compression; the default is 75.
