@@ -76,6 +76,39 @@ fn multiple_images_default_to_preview_beside_the_first_input() {
 }
 
 #[test]
+fn max_size_full_keeps_original_dimensions() {
+    let dir = TestDir::new();
+    let input = dir.0.join("photo.jpg");
+    DynamicImage::new_rgb8(32, 24).save(&input).unwrap();
+    let output = dir.0.join("output");
+
+    let result = Command::new(env!("CARGO_BIN_EXE_still"))
+        .env("PATH", "")
+        .args([
+            "previews",
+            "--no-deps",
+            "--clear-metadata",
+            "--max-size",
+            "full",
+        ])
+        .arg(&input)
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .unwrap();
+
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        image::open(output.join("photo.jpg")).unwrap().dimensions(),
+        (32, 24)
+    );
+}
+
+#[test]
 fn develops_raw_sensor_pixels_without_external_tools_or_embedded_jpeg() {
     let dir = TestDir::new();
     let input = dir.0.join("camera.DNG");

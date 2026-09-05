@@ -117,6 +117,19 @@ fn quality_argument_accepts_only_zero_through_one_hundred() {
 }
 
 #[test]
+fn max_size_accepts_full() {
+    let matches = subcommand()
+        .try_get_matches_from(["previews", "photo.jpg", "--max-size", "full"])
+        .expect("full should be a valid maximum size");
+    assert_eq!(matches.get_one::<String>("max_size").unwrap(), "full");
+
+    let mut help = Vec::new();
+    subcommand().write_long_help(&mut help).unwrap();
+    let help = String::from_utf8(help).unwrap();
+    assert!(help.contains("or 'full' to keep original dimensions"));
+}
+
+#[test]
 fn quality_controls_jpeg_and_webp_compression() {
     let image = image::open(Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg"))
         .expect("reference image should be readable");

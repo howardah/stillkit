@@ -112,8 +112,8 @@ pub fn subcommand() -> Command {
             Arg::new("max_size")
                 .short('s')
                 .long("max-size")
-                .help("Maximum dimension in pixels (defaults to 1000)")
-                .value_name("SIZE")
+                .help("Maximum dimension in pixels, or 'full' to keep original dimensions (defaults to 1000)")
+                .value_name("SIZE|full")
                 .default_value("1000"),
         )
         .arg(
@@ -180,16 +180,14 @@ pub fn run(matches: &clap::ArgMatches) {
         (PreviewInputs::Files(input_paths), output_dir)
     };
 
-    let max_dimension: u32 = matches
-        .get_one::<String>("max_size")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1000);
+    let max_size = matches.get_one::<String>("max_size").unwrap();
+    let max_dimension = max_size.parse().unwrap_or(1000);
 
     let format_str = matches.get_one::<String>("format").unwrap();
     let format = OutputFormat::from_str(format_str).unwrap_or(OutputFormat::Jpeg);
 
     let recursive = matches.get_flag("recursive");
-    let full = matches.get_flag("full");
+    let full = matches.get_flag("full") || max_size.eq_ignore_ascii_case("full");
     let clear_metadata = matches.get_flag("clear_metadata");
     let quality = *matches.get_one::<u8>("quality").unwrap();
 

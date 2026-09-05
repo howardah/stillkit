@@ -138,6 +138,7 @@ other directories are placed in that same output directory. Use `--output` to ch
 location. Directory input continues to default to `<directory>/preview`.
 
 This keeps the original image dimensions and only converts into the selected preview format.
+You can also write `--max-size full`; `--full` remains available as a shorthand.
 Use `--quality 0..100` (or `-q`) to control JPEG and WebP compression; the default is 75.
 By default previews keep the source photo metadata; add `--clear-metadata` to strip it.
 Preview generation requires no external programs, including when keeping metadata or using
