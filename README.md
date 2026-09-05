@@ -130,23 +130,33 @@ still previews ./photos --full
 This keeps the original image dimensions and only converts into the selected preview format.
 Use `--quality 0..100` (or `-q`) to control JPEG and WebP compression; the default is 75.
 By default previews keep the source photo metadata; add `--clear-metadata` to strip it.
-Metadata-preserving previews use `exiftool`. On macOS, HEIC/HEIF/HIF JPEG previews use Apple's
-hardware-accelerated `sips` when available, then fall back to the native Rust thumbnail path or
-ImageMagick. `--clear-metadata` uses ImageMagick so metadata stripping remains exact.
+Preview generation requires no external programs, including when keeping metadata or using
+`--full`. For HEIC/HEIF/HIF and camera RAW, it tries macOS `sips`, ImageMagick 7
+`magick`, and ImageMagick 6 `convert`, in that order, before using built-in Rust
+decoding. Missing programs and conversion failures continue to the next backend.
+This also applies with `--clear-metadata`: decoded pixels pass through the Rust
+output encoder, which strips source metadata.
+
+Metadata copying uses `exiftool` when available, with a Rust fallback for standard
+photographic EXIF/GPS fields, supported ICC/XMP profiles, and JPEG/PNG IPTC data.
+The fallback updates EXIF dimensions and orientation. Proprietary maker notes,
+RAW storage tags, and embedded thumbnails are not copied by the Rust metadata
+writer; install ExifTool if preserving proprietary metadata is important.
 
 Camera RAW previews recognize CR2/CR3/CRW, NEF/NRW, ARW/SR2/SRF, RAF, DNG,
 ORF, RW2, PEF, SRW, RAW/RWL, 3FR/FFF, IIQ, MOS, MRW, ERF, KDC, and DCR
-(case-insensitive). Conversion tries macOS `sips`, then ImageMagick 7 `magick`,
-then ImageMagick 6 `convert`, continuing when a tool is missing or cannot decode
-the file. Camera support depends on the installed codecs; ImageMagick may also
-need a RAW delegate such as darktable or dcraw.
+(case-insensitive). Specific camera models and compression variants must be
+supported by at least one available decoder. The built-in RAW decoder is
+[`rawler`](https://docs.rs/rawler/0.8.0/rawler/); ImageMagick may additionally use
+RAW delegates such as darktable or dcraw, but they are optional.
 
-If those tools fail, a built-in fallback extracts the largest decodable embedded
-JPEG that meets the requested preview size. This adds no dependencies and works
-with `--clear-metadata` without external tools, but does not develop RAW sensor
-data. Files without a sufficiently large embedded JPEG, and `--full`, require an
-external converter. All RAW paths support JPEG, PNG, and WebP output and the
-existing quality and metadata options; keeping metadata still requires `exiftool`.
+If external conversion fails, the Rust fallback first uses a sufficiently large
+embedded JPEG for resized RAW previews. When none is available, or with `--full`,
+it develops sensor pixels with white balance, demosaicing, camera color calibration,
+and sRGB conversion. All paths support JPEG, PNG, WebP, quality settings, and the
+metadata options. Rust decoding can be slower and use more memory than external
+accelerators. Corrupt files and unsupported camera variants can still fail;
+absence of external programs alone is not an error.
 Batch generation rejects inputs that map to the same output (for example,
 `photo.CR2` and `photo.jpg`); process those separately or use distinct names.
 
@@ -175,9 +185,12 @@ Inputs may be individual files, multiple files, or directories. Use `--recursive
 directories. Ramps assign values in sorted input order and include both endpoints. The explicit
 `--overwrite` mode replaces inputs; generated files in other modes require `--force` if they already exist.
 
-For an opt-in self-contained Rust HEIC decoder, build with `cargo install --path . --features native-heic`.
-This backend is tried first and falls back to ImageMagick for unsupported files. The `heic` crate is
-AGPL-or-commercial licensed, so review that license before distributing binaries built with this feature.
+Rust HEIC decoding is included in the default build. The existing `native-heic`
+feature enables the decoder's parallel processing (`cargo install --path . --features native-heic`).
+The `heic` dependency is AGPL-or-commercial licensed even without that feature;
+`rawler` is LGPL-2.1, and `img-parts` is MIT/Apache-2.0. Review these licenses when
+distributing binaries. Rawler adds a camera database and decoding dependencies;
+img-parts provides metadata container editing without external libraries.
 
 The Rust decoder uses CPU SIMD, not Apple hardware HEVC decoding. Hardware acceleration for the
 Rust path would require a separate VideoToolbox backend with platform FFI and additional codec and

@@ -8,6 +8,7 @@ use std::{
 
 mod batch;
 mod image;
+mod metadata;
 mod raw;
 #[cfg(test)]
 mod tests;

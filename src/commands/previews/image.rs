@@ -1,7 +1,9 @@
 use super::OutputFormat;
 use crate::shared::image::{is_heic_family, load_image};
 use image::{DynamicImage, GenericImageView, ImageEncoder};
-use std::{fs, io::Cursor, path::Path, process::Command as ProcessCommand};
+#[cfg(test)]
+use std::process::Command as ProcessCommand;
+use std::{fs, io::Cursor, path::Path};
 
 pub(super) fn do_generate_preview(
     input_path: &Path,
@@ -18,12 +20,11 @@ pub(super) fn do_generate_preview(
         max_dimension,
         format,
         full,
-        clear_metadata,
         quality,
     )?;
 
     if !clear_metadata {
-        copy_metadata_with_exiftool(input_path, output_path, orientation_normalized)?;
+        super::metadata::copy_metadata(input_path, output_path, orientation_normalized)?;
     }
 
     Ok(())
@@ -35,58 +36,10 @@ fn generate_preview_image(
     max_dimension: u32,
     format: OutputFormat,
     full: bool,
-    clear_metadata: bool,
     quality: u8,
 ) -> Result<bool, String> {
-    if is_heic_family(input_path) {
-        // macOS's ImageIO-backed `sips` can use Apple's hardware-accelerated
-        // HEIF/HEVC pipeline. It preserves the existing metadata flow here;
-        // clear-metadata mode stays on ImageMagick so stripping remains exact.
-        if !clear_metadata
-            && try_generate_heic_preview_with_sips(
-                input_path,
-                output_path,
-                max_dimension,
-                format,
-                full,
-                quality,
-            )?
-        {
-            return Ok(true);
-        }
-
-        // The native path is opt-in because the pure-Rust HEIC decoder has an
-        // AGPL-or-commercial license. It also leaves ImageMagick available for
-        // files or metadata variants the native decoder cannot handle.
-        #[cfg(feature = "native-heic")]
-        if try_generate_heic_preview_with_native(
-            input_path,
-            output_path,
-            max_dimension,
-            format,
-            full,
-            quality,
-        )
-        .is_ok()
-        {
-            return Ok(true);
-        }
-
-        // HEIC-family files benefit from ImageMagick's decoder and auto-orientation
-        // when available. This is also the compatibility fallback for the native path.
-        if try_generate_heic_preview_with_magick(
-            input_path,
-            output_path,
-            max_dimension,
-            full,
-            quality,
-        )? {
-            return Ok(true);
-        }
-    }
-
-    let raw = super::raw::is_raw(input_path);
-    let img = if raw {
+    let normalized = super::raw::is_raw(input_path) || is_heic_family(input_path);
+    let img = if normalized {
         super::raw::load_preview(input_path, max_dimension, full)?
     } else {
         load_image(input_path)?
@@ -116,7 +69,7 @@ fn generate_preview_image(
         )
     })?;
 
-    Ok(raw)
+    Ok(normalized)
 }
 
 pub(super) fn encode_image(
@@ -154,69 +107,7 @@ pub(super) fn encode_image(
     Ok(bytes)
 }
 
-#[cfg(target_os = "macos")]
-fn try_generate_heic_preview_with_sips(
-    input_path: &Path,
-    output_path: &Path,
-    max_dimension: u32,
-    format: OutputFormat,
-    full: bool,
-    quality: u8,
-) -> Result<bool, String> {
-    // sips supports JPEG, PNG, and several Apple image formats, but not WebP.
-    // Restricting this fast path to JPEG keeps the output-format contract clear.
-    if !matches!(format, OutputFormat::Jpeg) {
-        return Ok(false);
-    }
-
-    let mut command = ProcessCommand::new("sips");
-    command.arg("-s").arg("format").arg("jpeg");
-    command
-        .arg("-s")
-        .arg("formatOptions")
-        .arg(quality.max(1).to_string());
-
-    if !full {
-        command
-            .arg("--resampleHeightWidthMax")
-            .arg(max_dimension.to_string());
-    }
-
-    command.arg(input_path).arg("--out").arg(output_path);
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(err) => {
-            return Err(format!(
-                "Failed to launch sips for {}: {}",
-                input_path.display(),
-                err
-            ));
-        }
-    };
-
-    if output.status.success() {
-        return Ok(true);
-    }
-
-    // A present sips binary may still reject a HEIF variant. Let ImageMagick
-    // handle that case rather than making macOS less compatible than other OSes.
-    Ok(false)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn try_generate_heic_preview_with_sips(
-    _input_path: &Path,
-    _output_path: &Path,
-    _max_dimension: u32,
-    _format: OutputFormat,
-    _full: bool,
-    _quality: u8,
-) -> Result<bool, String> {
-    Ok(false)
-}
-
-#[cfg(feature = "native-heic")]
+#[cfg(all(test, feature = "native-heic"))]
 pub(super) fn try_generate_heic_preview_with_native(
     input_path: &Path,
     output_path: &Path,
@@ -296,6 +187,7 @@ pub(super) fn try_generate_heic_preview_with_native(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn try_generate_heic_preview_with_magick(
     input_path: &Path,
     output_path: &Path,
@@ -337,67 +229,6 @@ pub(super) fn try_generate_heic_preview_with_magick(
     Err(format!(
         "ImageMagick failed to convert {}: {}",
         input_path.display(),
-        stderr.trim()
-    ))
-}
-
-fn copy_metadata_with_exiftool(
-    input_path: &Path,
-    output_path: &Path,
-    orientation_normalized: bool,
-) -> Result<(), String> {
-    let (width, height) = image::image_dimensions(output_path).map_err(|e| {
-        format!(
-            "Failed to read output dimensions for {}: {}",
-            output_path.display(),
-            e
-        )
-    })?;
-
-    let mut command = ProcessCommand::new("exiftool");
-    command
-        .arg("-overwrite_original")
-        .arg("-TagsFromFile")
-        .arg(input_path)
-        .arg("-EXIF:all")
-        .arg("-XMP:all")
-        .arg("-IPTC:all")
-        .arg("-ICC_Profile")
-        .arg(format!("-IFD0:ImageWidth={width}"))
-        .arg(format!("-IFD0:ImageHeight={height}"))
-        .arg(format!("-ExifImageWidth={width}"))
-        .arg(format!("-ExifImageHeight={height}"));
-
-    if orientation_normalized {
-        command.arg("-Orientation#=1");
-    }
-
-    let output = match command.arg(output_path).output() {
-        Ok(output) => output,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!(
-                "ExifTool is required to preserve metadata for {}. Install `exiftool` or rerun with --clear-metadata.",
-                input_path.display()
-            ));
-        }
-        Err(err) => {
-            return Err(format!(
-                "Failed to launch ExifTool for {}: {}",
-                input_path.display(),
-                err
-            ));
-        }
-    };
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(format!(
-        "ExifTool failed to copy metadata from {} to {}: {}",
-        input_path.display(),
-        output_path.display(),
         stderr.trim()
     ))
 }

@@ -73,17 +73,41 @@ pub(super) fn load_preview(path: &Path, size: u32, full: bool) -> Result<Dynamic
             Err(error) => errors.push(error),
         }
     }
-    if !full {
+    if !full && is_raw(&path) {
         match embedded_preview(&path, size) {
             Ok(image) => return Ok(image),
             Err(error) => errors.push(error),
         }
     }
+    let native = if is_raw(&path) {
+        develop_raw(&path)
+    } else {
+        crate::shared::image::load_image(&path).map(|image| image.to_rgb8().into())
+    };
+    match native {
+        Ok(image) => return Ok(image),
+        Err(error) => errors.push(error),
+    }
     Err(format!(
-        "Failed to generate RAW preview for {}. Install ImageMagick with a RAW delegate, or use a supported macOS camera codec. Embedded JPEG fallback requires a preview at least {size}px and is unavailable with --full. {}",
+        "Failed to generate preview for {} with external and built-in decoders: {}",
         path.display(),
         errors.join("; ")
     ))
+}
+
+fn develop_raw(path: &Path) -> Result<DynamicImage, String> {
+    let raw = rawler::decode_file(path).map_err(|e| format!("Rust RAW decoder: {e}"))?;
+    let mut image = rawler::imgop::develop::RawDevelop::default()
+        .develop_intermediate(&raw)
+        .map_err(|e| format!("Rust RAW development: {e}"))?
+        .to_dynamic_image()
+        .ok_or("Rust RAW development returned invalid pixels")?;
+    if let Some(orientation) =
+        image::metadata::Orientation::from_exif(raw.orientation.to_u16() as u8)
+    {
+        image.apply_orientation(orientation);
+    }
+    Ok(image.to_rgb8().into())
 }
 
 #[cfg(target_os = "macos")]
