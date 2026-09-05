@@ -91,7 +91,15 @@ pub fn subcommand() -> Command {
             Arg::new("no-deps")
                 .long("no-deps")
                 .help("Use built-in codecs and metadata handling; never launch external tools")
+                .conflicts_with("tool")
                 .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("tool")
+                .long("tool")
+                .help("Force the RAW/HEIC conversion tool instead of using fallback order")
+                .value_name("TOOL")
+                .value_parser(["magick", "sips"]),
         )
         .arg(
             Arg::new("input")
@@ -200,7 +208,11 @@ pub fn run(matches: &clap::ArgMatches) {
         full,
         clear_metadata,
         quality,
-        pipeline: Pipeline::from_no_deps(matches.get_flag("no-deps")),
+        pipeline: match matches.get_one::<String>("tool").map(String::as_str) {
+            Some("magick") => Pipeline::Magick,
+            Some("sips") => Pipeline::Sips,
+            _ => Pipeline::from_no_deps(matches.get_flag("no-deps")),
+        },
     };
 
     generate_previews(&config);

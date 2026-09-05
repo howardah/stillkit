@@ -147,6 +147,10 @@ Preview generation requires no external programs, including when keeping metadat
 decoding. Missing programs and conversion failures continue to the next backend.
 This also applies with `--clear-metadata`: decoded pixels pass through the Rust
 output encoder, which strips source metadata.
+Use `--tool magick` or `--tool sips` to force that converter for RAW and
+HEIC/HEIF/HIF inputs when benchmarking. A forced tool is not allowed to fall
+back to another decoder, and `sips` is available only on macOS. `--tool` and
+`--no-deps` cannot be used together.
 Add `--no-deps` to bypass `sips`, `magick`, `convert`, and `exiftool` entirely,
 even when installed. This selects the built-in codec and metadata pipeline for
 benchmarking; resized RAW previews may still use their embedded JPEG, so use

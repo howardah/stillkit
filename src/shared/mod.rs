@@ -9,6 +9,8 @@ pub(crate) enum Pipeline {
     #[default]
     Auto,
     BuiltIn,
+    Magick,
+    Sips,
 }
 
 impl Pipeline {
@@ -17,6 +19,6 @@ impl Pipeline {
     }
 
     pub(crate) fn allows_tools(self) -> bool {
-        matches!(self, Self::Auto)
+        !matches!(self, Self::BuiltIn)
     }
 }

@@ -24,6 +24,30 @@ fn no_deps_is_optional_for_previews() {
 }
 
 #[test]
+fn tool_accepts_supported_converters_and_conflicts_with_no_deps() {
+    for tool in ["magick", "sips"] {
+        let matches = subcommand()
+            .try_get_matches_from(["previews", "--tool", tool])
+            .expect("supported conversion tool should parse");
+        assert_eq!(
+            matches.get_one::<String>("tool").map(String::as_str),
+            Some(tool)
+        );
+    }
+
+    assert!(
+        subcommand()
+            .try_get_matches_from(["previews", "--tool", "convert"])
+            .is_err()
+    );
+    assert!(
+        subcommand()
+            .try_get_matches_from(["previews", "--tool", "magick", "--no-deps"])
+            .is_err()
+    );
+}
+
+#[test]
 fn accepts_multiple_image_inputs() {
     let matches = subcommand()
         .try_get_matches_from(["previews", "one.jpg", "two.CR2", "three.png"])

@@ -47,6 +47,12 @@ pub(crate) fn load_preview(
     let path = fs::canonicalize(path)
         .map_err(|e| format!("Failed to resolve RAW input {}: {e}", path.display()))?;
     let mut errors = Vec::new();
+    if matches!(pipeline, super::Pipeline::Sips) {
+        return load_with_sips(&path, size, full, report_tool);
+    }
+    if matches!(pipeline, super::Pipeline::Magick) {
+        return load_with_magick("magick", &path, size, full, report_tool);
+    }
     if pipeline.allows_tools() {
         #[cfg(target_os = "macos")]
         match with_sips(&path, size, full, report_tool) {
@@ -54,30 +60,8 @@ pub(crate) fn load_preview(
             Err(error) => errors.push(error),
         }
         for program in ["magick", "convert"] {
-            report_tool(program);
-            let mut command = Command::new(program);
-            let mut first_frame = path.as_os_str().to_os_string();
-            first_frame.push("[0]");
-            command.arg(first_frame).arg("-auto-orient");
-            if !full {
-                command.arg("-resize").arg(format!("{size}x{size}>"));
-            }
-            command.args(["-depth", "8", "png:-"]);
-            let result = command
-                .output()
-                .map_err(|e| format!("{program}: {e}"))
-                .and_then(|output| {
-                    if !output.status.success() {
-                        return Err(format!(
-                            "{program}: {}",
-                            String::from_utf8_lossy(&output.stderr).trim()
-                        ));
-                    }
-                    image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
-                        .map_err(|e| format!("{program} returned invalid pixels: {e}"))
-                });
-            match result {
-                Ok(image) => return Ok(image.to_rgb8().into()),
+            match load_with_magick(program, &path, size, full, report_tool) {
+                Ok(image) => return Ok(image),
                 Err(error) => errors.push(error),
             }
         }
@@ -102,6 +86,56 @@ pub(crate) fn load_preview(
         path.display(),
         errors.join("; ")
     ))
+}
+
+fn load_with_magick(
+    program: &str,
+    path: &Path,
+    size: u32,
+    full: bool,
+    report_tool: super::ToolReporter<'_>,
+) -> Result<DynamicImage, String> {
+    report_tool(program);
+    let mut command = Command::new(program);
+    let mut first_frame = path.as_os_str().to_os_string();
+    first_frame.push("[0]");
+    command.arg(first_frame).arg("-auto-orient");
+    if !full {
+        command.arg("-resize").arg(format!("{size}x{size}>"));
+    }
+    let output = command
+        .args(["-depth", "8", "png:-"])
+        .output()
+        .map_err(|e| format!("{program}: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{program}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
+        .map(|image| image.to_rgb8().into())
+        .map_err(|e| format!("{program} returned invalid pixels: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn load_with_sips(
+    path: &Path,
+    size: u32,
+    full: bool,
+    report_tool: super::ToolReporter<'_>,
+) -> Result<DynamicImage, String> {
+    with_sips(path, size, full, report_tool)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn load_with_sips(
+    _path: &Path,
+    _size: u32,
+    _full: bool,
+    _report_tool: super::ToolReporter<'_>,
+) -> Result<DynamicImage, String> {
+    Err("sips is only available on macOS".into())
 }
 
 pub(crate) fn develop_raw(path: &Path) -> Result<DynamicImage, String> {
