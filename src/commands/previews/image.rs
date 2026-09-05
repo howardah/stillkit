@@ -1,10 +1,47 @@
 use super::OutputFormat;
+use crate::shared::Pipeline;
 use crate::shared::image::{is_heic_family, load_image};
 use image::{DynamicImage, GenericImageView, ImageEncoder};
 #[cfg(test)]
 use std::process::Command as ProcessCommand;
 use std::{fs, io::Cursor, path::Path};
 
+#[derive(Clone, Copy)]
+pub(super) struct PreviewOptions {
+    pub max_dimension: u32,
+    pub format: OutputFormat,
+    pub full: bool,
+    pub clear_metadata: bool,
+    pub quality: u8,
+    pub pipeline: Pipeline,
+}
+
+pub(super) fn generate_preview(
+    input_path: &Path,
+    output_path: &Path,
+    options: PreviewOptions,
+) -> Result<(), String> {
+    let orientation_normalized = generate_preview_image(
+        input_path,
+        output_path,
+        options.max_dimension,
+        options.format,
+        options.full,
+        options.quality,
+        options.pipeline,
+    )?;
+    if !options.clear_metadata {
+        crate::shared::metadata::copy_metadata(
+            input_path,
+            output_path,
+            orientation_normalized,
+            options.pipeline,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 pub(super) fn do_generate_preview(
     input_path: &Path,
     output_path: &Path,
@@ -14,20 +51,18 @@ pub(super) fn do_generate_preview(
     clear_metadata: bool,
     quality: u8,
 ) -> Result<(), String> {
-    let orientation_normalized = generate_preview_image(
+    generate_preview(
         input_path,
         output_path,
-        max_dimension,
-        format,
-        full,
-        quality,
-    )?;
-
-    if !clear_metadata {
-        super::metadata::copy_metadata(input_path, output_path, orientation_normalized)?;
-    }
-
-    Ok(())
+        PreviewOptions {
+            max_dimension,
+            format,
+            full,
+            clear_metadata,
+            quality,
+            pipeline: Pipeline::Auto,
+        },
+    )
 }
 
 fn generate_preview_image(
@@ -37,10 +72,13 @@ fn generate_preview_image(
     format: OutputFormat,
     full: bool,
     quality: u8,
+    pipeline: Pipeline,
 ) -> Result<bool, String> {
     let normalized = super::raw::is_raw(input_path) || is_heic_family(input_path);
     let img = if normalized {
-        super::raw::load_preview(input_path, max_dimension, full)?
+        super::raw::load_preview(input_path, max_dimension, full, pipeline)?
+            .to_rgb8()
+            .into()
     } else {
         load_image(input_path)?
     };

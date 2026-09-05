@@ -3,9 +3,15 @@ use img_parts::{DynImage, ImageEXIF};
 use std::{fs, io::Cursor, path::Path, process::Command as ProcessCommand};
 
 mod profiles;
+mod tiff;
 
-pub(super) fn copy_metadata(input: &Path, output: &Path, normalized: bool) -> Result<(), String> {
-    if copy_metadata_with_exiftool(input, output, normalized).is_ok() {
+pub(crate) fn copy_metadata(
+    input: &Path,
+    output: &Path,
+    normalized: bool,
+    pipeline: super::Pipeline,
+) -> Result<(), String> {
+    if pipeline.allows_tools() && copy_metadata_with_exiftool(input, output, normalized).is_ok() {
         return Ok(());
     }
     copy_native(input, output, normalized)
@@ -18,7 +24,7 @@ fn copy_native(input: &Path, output: &Path, normalized: bool) -> Result<(), Stri
     let parsed = exif::Reader::new()
         .read_from_container(&mut Cursor::new(&data))
         .ok();
-    let parsed = if parsed.is_none() && super::raw::is_raw(input) {
+    let parsed = if parsed.is_none() && super::decoding::is_raw(input) {
         raw_exif(input).ok()
     } else {
         parsed
@@ -53,6 +59,26 @@ fn copy_native(input: &Path, output: &Path, normalized: bool) -> Result<(), Stri
             value: Value::Short(vec![1]),
         });
     }
+    let bytes = fs::read(output).map_err(|e| e.to_string())?;
+    match image::guess_format(&bytes).map_err(|e| e.to_string())? {
+        image::ImageFormat::Tiff => {
+            for field in parsed
+                .iter()
+                .flat_map(|exif| exif.fields())
+                .filter(|field| {
+                    field.ifd_num == In::PRIMARY
+                        && matches!(field.tag, Tag(Context::Tiff, 700 | 33723 | 34675))
+                })
+            {
+                fields.push(field.clone());
+            }
+            let bytes = tiff::copy(&bytes, &fields)?;
+            return fs::write(output, bytes).map_err(|e| e.to_string());
+        }
+        // These output formats do not support our photographic metadata containers.
+        image::ImageFormat::Bmp | image::ImageFormat::Gif => return Ok(()),
+        _ => {}
+    }
     let mut writer = exif::experimental::Writer::new();
     for field in &fields {
         writer.push_field(field);
@@ -64,7 +90,6 @@ fn copy_native(input: &Path, output: &Path, normalized: bool) -> Result<(), Stri
             parsed.as_ref().is_some_and(|exif| exif.little_endian()),
         )
         .map_err(|e| e.to_string())?;
-    let bytes = fs::read(output).map_err(|e| e.to_string())?;
     let mut container = DynImage::from_bytes(bytes.into())
         .map_err(|e| e.to_string())?
         .ok_or("Unsupported preview metadata container")?;

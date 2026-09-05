@@ -2,29 +2,26 @@ use image::DynamicImage;
 use std::{fs, path::Path};
 
 pub(crate) fn is_supported_image(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "jpg"
-                    | "jpeg"
-                    | "png"
-                    | "webp"
-                    | "gif"
-                    | "bmp"
-                    | "tiff"
-                    | "tif"
-                    | "heic"
-                    | "heif"
-                    | "hif"
-                    | "arw"
-                    | "cr2"
-                    | "nef"
-                    | "raf"
-                    | "dng"
-            )
-        })
+    super::decoding::is_raw(path)
+        || path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "jpg"
+                        | "jpeg"
+                        | "png"
+                        | "webp"
+                        | "gif"
+                        | "bmp"
+                        | "tiff"
+                        | "tif"
+                        | "heic"
+                        | "heif"
+                        | "hif"
+                )
+            })
 }
 
 pub(crate) fn is_heic_family(path: &Path) -> bool {

@@ -7,6 +7,22 @@ use crate::shared::image::{is_heic_family, is_supported_image};
 use image::GenericImageView;
 use std::{fs, path::Path, process, process::Command as ProcessCommand};
 
+#[test]
+fn no_deps_is_optional_for_previews() {
+    let normal = subcommand().try_get_matches_from(["previews"]).unwrap();
+    assert!(!normal.get_flag("no-deps"));
+    let native = subcommand()
+        .try_get_matches_from([
+            "previews",
+            "photos",
+            "--no-deps",
+            "--full",
+            "--clear-metadata",
+        ])
+        .unwrap();
+    assert!(native.get_flag("no-deps"));
+}
+
 fn magick_available() -> bool {
     ProcessCommand::new("magick")
         .arg("-version")

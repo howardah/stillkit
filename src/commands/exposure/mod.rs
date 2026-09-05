@@ -1,12 +1,11 @@
 use crate::shared::image::{is_heic_family, is_supported_image};
+use crate::shared::{Pipeline, decoding::is_raw};
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
-#[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicU64, Ordering};
+mod processing;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OutputMode {
@@ -21,9 +20,21 @@ enum NameMode {
     Adjusted,
 }
 
+struct Job {
+    input: PathBuf,
+    output: PathBuf,
+    adjustment: f64,
+}
+
 pub fn subcommand() -> Command {
     Command::new("exposure")
         .about("Adjust image exposure")
+        .arg(
+            Arg::new("no-deps")
+                .long("no-deps")
+                .help("Use built-in codecs and metadata handling; never launch external tools")
+                .action(ArgAction::SetTrue),
+        )
         .arg(
             Arg::new("inputs")
                 .help("Image files or directories to process")
@@ -157,19 +168,12 @@ pub fn run(matches: &ArgMatches) {
     };
     let adjustments = build_adjustments(images.len(), adjustment, start, end);
     let force = matches.get_flag("force");
-
-    let progress = ProgressBar::new(images.len() as u64);
-    progress.set_style(
-        ProgressStyle::with_template("{spinner:.green} {msg} [{bar:40.cyan/blue}] {pos}/{len}")
-            .expect("valid progress template")
-            .progress_chars("=> "),
-    );
-    progress.set_message("Adjusting exposure");
-
-    let results: Vec<Result<PathBuf, String>> = images
-        .par_iter()
-        .zip(adjustments.par_iter())
+    let pipeline = Pipeline::from_no_deps(matches.get_flag("no-deps"));
+    let jobs = images
+        .iter()
+        .zip(&adjustments)
         .map(|(input, adjustment)| {
+            processing::exposure_factor(*adjustment)?;
             let output = output_path(
                 input,
                 &inputs,
@@ -179,6 +183,36 @@ pub fn run(matches: &ArgMatches) {
                 *adjustment,
                 precision,
             )?;
+            Ok(Job {
+                input: input.clone(),
+                output,
+                adjustment: *adjustment,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>();
+    let jobs = match jobs.and_then(|jobs| {
+        validate_outputs(&jobs, mode)?;
+        Ok(jobs)
+    }) {
+        Ok(jobs) => jobs,
+        Err(error) => {
+            eprintln!("{error}");
+            return;
+        }
+    };
+
+    let progress = ProgressBar::new(images.len() as u64);
+    progress.set_style(
+        ProgressStyle::with_template("{spinner:.green} {msg} [{bar:40.cyan/blue}] {pos}/{len}")
+            .expect("valid progress template")
+            .progress_chars("=> "),
+    );
+    progress.set_message("Adjusting exposure");
+
+    let results: Vec<Result<PathBuf, String>> = jobs
+        .par_iter()
+        .map(|job| {
+            let output = &job.output;
 
             if mode != OutputMode::Overwrite {
                 if let Some(parent) = output.parent() {
@@ -193,23 +227,65 @@ pub fn run(matches: &ArgMatches) {
                 }
             }
 
-            let result = apply_exposure(input, &output, *adjustment);
+            let result = processing::apply_exposure(
+                &job.input,
+                output,
+                job.adjustment,
+                pipeline,
+                mode == OutputMode::Overwrite || force,
+            );
             progress.inc(1);
-            result.map(|_| output)
+            result.map(|_| output.clone())
         })
         .collect();
 
     let errors = results.iter().filter(|result| result.is_err()).count();
     for result in results {
         if let Err(error) = result {
-            progress.println(error);
+            eprintln!("{error}");
         }
     }
-    progress.finish_with_message(format!(
+    progress.finish_and_clear();
+    println!(
         "Exposure complete: {} generated, {} errors",
         images.len() - errors,
         errors
-    ));
+    );
+}
+
+fn validate_outputs(jobs: &[Job], mode: OutputMode) -> Result<(), String> {
+    let sources = jobs
+        .iter()
+        .map(|job| fs::canonicalize(&job.input))
+        .collect::<Result<std::collections::HashSet<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut outputs = std::collections::HashSet::new();
+    for job in jobs {
+        let absolute = std::path::absolute(&job.output).map_err(|e| e.to_string())?;
+        let key = fs::canonicalize(&absolute).unwrap_or_else(|_| {
+            absolute
+                .parent()
+                .and_then(|parent| fs::canonicalize(parent).ok())
+                .map(|parent| parent.join(absolute.file_name().unwrap_or_default()))
+                .unwrap_or(absolute)
+        });
+        if mode != OutputMode::Overwrite && sources.contains(&key) {
+            return Err(format!(
+                "Output would replace an input: {}. Use a separate output directory or --overwrite.",
+                job.output.display()
+            ));
+        }
+        // Default macOS/Windows filesystems also collide on case-only changes.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let key = PathBuf::from(key.as_os_str().to_ascii_lowercase());
+        if !outputs.insert(key) {
+            return Err(format!(
+                "Multiple inputs produce {}. Process them separately or use distinct names.",
+                job.output.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn collect_images(inputs: &[PathBuf], recursive: bool) -> Vec<PathBuf> {
@@ -269,6 +345,12 @@ fn output_path(
     precision: u8,
 ) -> Result<PathBuf, String> {
     if mode == OutputMode::Overwrite {
+        if is_heic_family(input) || is_raw(input) {
+            return Err(format!(
+                "Cannot overwrite HEIC/RAW in its original format: {}. Use --output or --next-to-original to save PNG copies.",
+                input.display()
+            ));
+        }
         return Ok(input.to_path_buf());
     }
 
@@ -279,6 +361,13 @@ fn output_path(
         adjusted_filename(input, adjustment, precision)?
     } else {
         filename.to_os_string()
+    };
+    let filename = if is_heic_family(input) || is_raw(input) {
+        PathBuf::from(filename)
+            .with_extension("png")
+            .into_os_string()
+    } else {
+        filename
     };
 
     if mode == OutputMode::NextToOriginal {
@@ -312,12 +401,8 @@ fn adjusted_filename(
 ) -> Result<std::ffi::OsString, String> {
     let stem = input
         .file_stem()
-        .and_then(|stem| stem.to_str())
-        .ok_or_else(|| format!("Input filename is not valid UTF-8: {}", input.display()))?;
-    let extension = input
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("jpg");
+        .ok_or_else(|| format!("Input has no filename: {}", input.display()))?;
+    let extension = input.extension().unwrap_or(std::ffi::OsStr::new("jpg"));
     let scale = 10f64.powi(precision as i32);
     let rounded = (adjustment * scale).round() / scale;
     let value = format!("{rounded:.precision$}", precision = precision as usize)
@@ -328,135 +413,51 @@ fn adjusted_filename(
     } else {
         value
     };
-    Ok(std::ffi::OsString::from(format!(
-        "{stem}_{value}.{extension}"
-    )))
-}
-
-fn apply_exposure(input: &Path, output: &Path, adjustment: f64) -> Result<(), String> {
-    if !adjustment.is_finite() {
-        return Err(format!("Exposure adjustment must be finite: {adjustment}"));
-    }
-    let factor = 2f64.powf(adjustment);
-    if !factor.is_finite() || factor <= 0.0 {
-        return Err(format!(
-            "Exposure adjustment is outside the supported range: {adjustment}"
-        ));
-    }
-
-    if is_heic_family(input) && try_apply_heic_exposure_with_sips(input, output, factor)? {
-        return Ok(());
-    }
-
-    apply_exposure_to_raster(input, output, factor)
-}
-
-#[cfg(target_os = "macos")]
-fn try_apply_heic_exposure_with_sips(
-    input: &Path,
-    output: &Path,
-    factor: f64,
-) -> Result<bool, String> {
-    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    let temporary_jpeg = loop {
-        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let candidate = std::env::temp_dir().join(format!(
-            "stillkit-exposure-{}-{counter}.jpg",
-            std::process::id()
-        ));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(_) => {
-                fs::remove_file(&candidate).map_err(|error| {
-                    format!(
-                        "Failed to prepare sips temporary file {}: {error}",
-                        candidate.display()
-                    )
-                })?;
-                break candidate;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(format!(
-                    "Failed to create sips temporary file {}: {error}",
-                    candidate.display()
-                ));
-            }
-        }
-    };
-
-    let sips_output = match ProcessCommand::new("sips")
-        .arg("-s")
-        .arg("format")
-        .arg("jpeg")
-        .arg(input)
-        .arg("--out")
-        .arg(&temporary_jpeg)
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => {
-            return Err(format!(
-                "Failed to launch sips for {}: {error}",
-                input.display()
-            ));
-        }
-    };
-
-    if !sips_output.status.success() {
-        let _ = fs::remove_file(&temporary_jpeg);
-        return Ok(false);
-    }
-
-    let result = apply_exposure_to_raster(&temporary_jpeg, output, factor);
-    let _ = fs::remove_file(&temporary_jpeg);
-    result.map(|_| true)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn try_apply_heic_exposure_with_sips(
-    _input: &Path,
-    _output: &Path,
-    _factor: f64,
-) -> Result<bool, String> {
-    Ok(false)
-}
-
-fn apply_exposure_to_raster(input: &Path, output: &Path, factor: f64) -> Result<(), String> {
-    let output = ProcessCommand::new("magick")
-        .arg(input)
-        .arg("-evaluate")
-        .arg("multiply")
-        .arg(format!("{factor:.12}"))
-        .arg(output)
-        .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                "ImageMagick (`magick`) is required for exposure adjustments.".to_string()
-            } else {
-                format!("Failed to launch ImageMagick for {}: {e}", input.display())
-            }
-        })?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "ImageMagick failed for {}: {}",
-            input.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
+    let mut filename = stem.to_os_string();
+    filename.push(format!("_{value}."));
+    filename.push(extension);
+    Ok(filename)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_deps_is_optional_and_preserves_output_conflicts() {
+        let normal = subcommand()
+            .try_get_matches_from(["exposure", "photo.png", "-e", "1", "--next-to-original"])
+            .unwrap();
+        assert!(!normal.get_flag("no-deps"));
+        let native = subcommand()
+            .try_get_matches_from([
+                "exposure",
+                "photo.png",
+                "-e",
+                "1",
+                "--next-to-original",
+                "--no-deps",
+            ])
+            .unwrap();
+        assert!(native.get_flag("no-deps"));
+        assert!(
+            subcommand()
+                .try_get_matches_from(["exposure", "--no-deps"])
+                .is_err()
+        );
+        assert!(
+            subcommand()
+                .try_get_matches_from([
+                    "exposure",
+                    "photo.png",
+                    "--no-deps",
+                    "--overwrite",
+                    "-o",
+                    "output"
+                ])
+                .is_err()
+        );
+    }
 
     #[test]
     fn ramps_include_both_endpoints() {

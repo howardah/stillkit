@@ -8,13 +8,12 @@ use std::{
 
 mod batch;
 mod image;
-mod metadata;
-mod raw;
+use crate::shared::{Pipeline, decoding as raw};
 #[cfg(test)]
 mod tests;
 
 use batch::{generate_previews, preview_size_label, prompt_existing_file_action};
-use image::do_generate_preview;
+use image::PreviewOptions;
 
 /// Supported output image formats
 #[derive(Debug, Clone, Copy, Default)]
@@ -62,6 +61,7 @@ struct PreviewConfig {
     full: bool,
     clear_metadata: bool,
     quality: u8,
+    pipeline: Pipeline,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,9 +70,28 @@ enum ExistingFileAction {
     Skip,
 }
 
+impl PreviewConfig {
+    fn image_options(&self) -> PreviewOptions {
+        PreviewOptions {
+            max_dimension: self.max_dimension,
+            format: self.format,
+            full: self.full,
+            clear_metadata: self.clear_metadata,
+            quality: self.quality,
+            pipeline: self.pipeline,
+        }
+    }
+}
+
 pub fn subcommand() -> Command {
     Command::new("previews")
         .about("Generate preview images")
+        .arg(
+            Arg::new("no-deps")
+                .long("no-deps")
+                .help("Use built-in codecs and metadata handling; never launch external tools")
+                .action(ArgAction::SetTrue),
+        )
         .arg(
             Arg::new("input")
                 .help("Input directory to process (defaults to current directory)")
@@ -179,6 +198,7 @@ pub fn run(matches: &clap::ArgMatches) {
         full,
         clear_metadata,
         quality,
+        pipeline: Pipeline::from_no_deps(matches.get_flag("no-deps")),
     };
 
     if is_single_file {
@@ -230,15 +250,7 @@ pub fn run(matches: &clap::ArgMatches) {
             return;
         }
 
-        match do_generate_preview(
-            &input_file,
-            &output_path,
-            config.max_dimension,
-            config.format,
-            config.full,
-            config.clear_metadata,
-            config.quality,
-        ) {
+        match image::generate_preview(&input_file, &output_path, config.image_options()) {
             Ok(_) => {
                 progress.inc(1);
                 progress.finish_with_message("Generated 1 preview");

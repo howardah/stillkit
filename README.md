@@ -136,6 +136,10 @@ Preview generation requires no external programs, including when keeping metadat
 decoding. Missing programs and conversion failures continue to the next backend.
 This also applies with `--clear-metadata`: decoded pixels pass through the Rust
 output encoder, which strips source metadata.
+Add `--no-deps` to bypass `sips`, `magick`, `convert`, and `exiftool` entirely,
+even when installed. This selects the built-in codec and metadata pipeline for
+benchmarking; resized RAW previews may still use their embedded JPEG, so use
+`--full` when benchmarking full sensor development.
 
 Metadata copying uses `exiftool` when available, with a Rust fallback for standard
 photographic EXIF/GPS fields, supported ICC/XMP profiles, and JPEG/PNG IPTC data.
@@ -163,15 +167,31 @@ Batch generation rejects inputs that map to the same output (for example,
 **Adjust exposure**
 
 Exposure adjustments use photographic stops: `+1` doubles brightness and `-1` halves it.
-ImageMagick (`magick`) is required for the pixel conversion. On macOS, HEIC/HEIF/HIF inputs are
-first decoded to a temporary JPEG with `sips` when available, then adjusted with ImageMagick;
-unsupported files fall back to direct ImageMagick processing.
+No external tools are required. On macOS, HEIC/HEIF/HIF and RAW inputs first try
+`sips` decoding followed by built-in pixel adjustment. Otherwise conversion tries
+`magick`, then ImageMagick 6 `convert`, then Rust decoding and adjustment. Missing
+or failing external programs fall through to the built-in pipeline. `--no-deps`
+skips all external programs, including ExifTool for metadata copying.
+
+Exposure multiplies color channel values by `2^stops`, clips them to their output
+range, and preserves alpha. The Rust pipeline keeps 16-bit data when the input
+and output codecs support it. JPEG output uses quality 90; WebP uses lossless
+encoding. Decoder color rendering may differ between backends.
+
+HEIC and camera RAW inputs produce PNG copies (for example, `photo_+1_0.png`),
+including with `--original-names`; other supported raster inputs keep their
+extensions. The built-in pipeline cannot encode HEIC or camera RAW, so in-place
+`--overwrite` rejects those inputs before changing files. This naming policy is
+the same with and without external tools. Standard metadata is preserved using
+the same optional-ExifTool policy as previews; TIFF also retains standard metadata.
+BMP/GIF output does not receive photographic EXIF metadata. Exposure processes
+the first frame/image of multi-image containers.
 
 ```sh
 # Save beside the original as photo_+1_5.jpg
 still exposure photo.jpg --adjustment 1.5 --next-to-original
 
-# Overwrite every image in a directory
+# Overwrite supported raster images in a directory (excluding HEIC/RAW)
 still exposure ./photos --adjustment=-0.2 --overwrite
 
 # Apply a ramp from -1.0 to +1.0 across a sorted directory
@@ -179,11 +199,20 @@ still exposure ./photos --start=-1 --end=1 --output ./exposed --precision 2
 
 # Keep original names in the output directory instead of adding suffixes
 still exposure ./photos --adjustment 0.5 --output ./exposed --original-names
+
+# Compare automatic and built-in pipelines using separate output directories
+time still previews photo.CR2 --full --output preview-auto
+time still previews photo.CR2 --full --no-deps --output preview-rust
+time still exposure photo.HEIC -e 1 --output exposed-auto
+time still exposure photo.HEIC -e 1 --no-deps --output exposed-rust
 ```
 
 Inputs may be individual files, multiple files, or directories. Use `--recursive` for nested
 directories. Ramps assign values in sorted input order and include both endpoints. The explicit
 `--overwrite` mode replaces inputs; generated files in other modes require `--force` if they already exist.
+Colliding output names are rejected before processing. Completed exposure output
+is staged before replacing a file, so decoding or metadata failures leave the
+original intact.
 
 Rust HEIC decoding is included in the default build. The existing `native-heic`
 feature enables the decoder's parallel processing (`cargo install --path . --features native-heic`).

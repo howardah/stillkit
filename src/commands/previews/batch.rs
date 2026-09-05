@@ -1,4 +1,4 @@
-use super::image::do_generate_preview;
+use super::image::generate_preview;
 use super::{ExistingFileAction, PreviewConfig};
 use crate::shared::image::is_supported_image;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -114,16 +114,8 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
                 // Change extension to output format
                 output_path = output_path.with_extension(config.format.extension());
 
-                let result = do_generate_preview(
-                    path,
-                    &output_path,
-                    config.max_dimension,
-                    config.format,
-                    config.full,
-                    config.clear_metadata,
-                    config.quality,
-                )
-                .map(|_| output_path);
+                let result = generate_preview(path, &output_path, config.image_options())
+                    .map(|_| output_path);
                 progress.inc(1);
                 result
             },
@@ -224,7 +216,7 @@ fn collect_image_files(dir: &Path, recursive: bool) -> Vec<PathBuf> {
         for entry in walkdir::WalkDir::new(dir).into_iter().flatten() {
             let path = entry.path();
             if path.is_file() {
-                if is_supported_image(path) || super::raw::is_raw(path) {
+                if is_supported_image(path) {
                     result.push(path.to_path_buf());
                 }
                 progress.inc(1);
@@ -234,7 +226,7 @@ fn collect_image_files(dir: &Path, recursive: bool) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
-                if is_supported_image(&path) || super::raw::is_raw(&path) {
+                if is_supported_image(&path) {
                     result.push(path);
                 }
                 progress.inc(1);
@@ -281,6 +273,7 @@ mod tests {
             full: false,
             clear_metadata: true,
             quality: 75,
+            pipeline: crate::shared::Pipeline::Auto,
         };
         generate_previews(&config);
         assert!(!config.output_dir.exists());

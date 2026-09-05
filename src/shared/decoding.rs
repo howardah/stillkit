@@ -1,7 +1,7 @@
 use image::{DynamicImage, ImageDecoder};
 use std::{fs, io::Cursor, path::Path, process::Command};
 
-pub(super) fn is_raw(path: &Path) -> bool {
+pub(crate) fn is_raw(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| {
@@ -37,40 +37,47 @@ pub(super) fn is_raw(path: &Path) -> bool {
 
 // Decode tool output back to pixels so all formats share the same encoder and
 // metadata policy, including sips conversions requested with --clear-metadata.
-pub(super) fn load_preview(path: &Path, size: u32, full: bool) -> Result<DynamicImage, String> {
+pub(crate) fn load_preview(
+    path: &Path,
+    size: u32,
+    full: bool,
+    pipeline: super::Pipeline,
+) -> Result<DynamicImage, String> {
     let path = fs::canonicalize(path)
         .map_err(|e| format!("Failed to resolve RAW input {}: {e}", path.display()))?;
     let mut errors = Vec::new();
-    #[cfg(target_os = "macos")]
-    match with_sips(&path, size, full) {
-        Ok(image) => return Ok(image),
-        Err(error) => errors.push(error),
-    }
-    for program in ["magick", "convert"] {
-        let mut command = Command::new(program);
-        let mut first_frame = path.as_os_str().to_os_string();
-        first_frame.push("[0]");
-        command.arg(first_frame).arg("-auto-orient");
-        if !full {
-            command.arg("-resize").arg(format!("{size}x{size}>"));
-        }
-        command.args(["-depth", "8", "png:-"]);
-        let result = command
-            .output()
-            .map_err(|e| format!("{program}: {e}"))
-            .and_then(|output| {
-                if !output.status.success() {
-                    return Err(format!(
-                        "{program}: {}",
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    ));
-                }
-                image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
-                    .map_err(|e| format!("{program} returned invalid pixels: {e}"))
-            });
-        match result {
-            Ok(image) => return Ok(image.to_rgb8().into()),
+    if pipeline.allows_tools() {
+        #[cfg(target_os = "macos")]
+        match with_sips(&path, size, full) {
+            Ok(image) => return Ok(image),
             Err(error) => errors.push(error),
+        }
+        for program in ["magick", "convert"] {
+            let mut command = Command::new(program);
+            let mut first_frame = path.as_os_str().to_os_string();
+            first_frame.push("[0]");
+            command.arg(first_frame).arg("-auto-orient");
+            if !full {
+                command.arg("-resize").arg(format!("{size}x{size}>"));
+            }
+            command.args(["-depth", "8", "png:-"]);
+            let result = command
+                .output()
+                .map_err(|e| format!("{program}: {e}"))
+                .and_then(|output| {
+                    if !output.status.success() {
+                        return Err(format!(
+                            "{program}: {}",
+                            String::from_utf8_lossy(&output.stderr).trim()
+                        ));
+                    }
+                    image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
+                        .map_err(|e| format!("{program} returned invalid pixels: {e}"))
+                });
+            match result {
+                Ok(image) => return Ok(image.to_rgb8().into()),
+                Err(error) => errors.push(error),
+            }
         }
     }
     if !full && is_raw(&path) {
@@ -95,7 +102,7 @@ pub(super) fn load_preview(path: &Path, size: u32, full: bool) -> Result<Dynamic
     ))
 }
 
-fn develop_raw(path: &Path) -> Result<DynamicImage, String> {
+pub(crate) fn develop_raw(path: &Path) -> Result<DynamicImage, String> {
     let raw = rawler::decode_file(path).map_err(|e| format!("Rust RAW decoder: {e}"))?;
     let mut image = rawler::imgop::develop::RawDevelop::default()
         .develop_intermediate(&raw)
@@ -107,11 +114,28 @@ fn develop_raw(path: &Path) -> Result<DynamicImage, String> {
     {
         image.apply_orientation(orientation);
     }
-    Ok(image.to_rgb8().into())
+    Ok(image)
+}
+
+pub(crate) fn load_native(path: &Path) -> Result<DynamicImage, String> {
+    if is_raw(path) {
+        return develop_raw(path);
+    }
+    if super::image::is_heic_family(path) {
+        return super::image::load_image(path);
+    }
+    let mut decoder = image::ImageReader::open(path)
+        .map_err(|e| format!("Failed to open {}: {e}", path.display()))?
+        .into_decoder()
+        .map_err(|e| format!("Failed to decode {}: {e}", path.display()))?;
+    let orientation = decoder.orientation().map_err(|e| e.to_string())?;
+    let mut image = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
+    image.apply_orientation(orientation);
+    Ok(image)
 }
 
 #[cfg(target_os = "macos")]
-fn with_sips(path: &Path, size: u32, full: bool) -> Result<DynamicImage, String> {
+pub(crate) fn with_sips(path: &Path, size: u32, full: bool) -> Result<DynamicImage, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     // An exclusively created directory isolates concurrent conversions and is
