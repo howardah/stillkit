@@ -121,8 +121,12 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
                 // Change extension to output format
                 output_path = output_path.with_extension(config.format.extension());
 
-                let result = generate_preview(path, &output_path, config.image_options())
-                    .map(|_| output_path);
+                let report_tool = |tool: &str| {
+                    progress.set_message(format!("Generating previews [{tool}]"));
+                };
+                let result =
+                    generate_preview(path, &output_path, config.image_options(), &report_tool)
+                        .map(|_| output_path);
                 progress.inc(1);
                 result
             },

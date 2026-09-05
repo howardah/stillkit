@@ -10,8 +10,11 @@ pub(crate) fn copy_metadata(
     output: &Path,
     normalized: bool,
     pipeline: super::Pipeline,
+    report_tool: super::ToolReporter<'_>,
 ) -> Result<(), String> {
-    if pipeline.allows_tools() && copy_metadata_with_exiftool(input, output, normalized).is_ok() {
+    if pipeline.allows_tools()
+        && copy_metadata_with_exiftool(input, output, normalized, report_tool).is_ok()
+    {
         return Ok(());
     }
     copy_native(input, output, normalized)
@@ -166,6 +169,7 @@ fn copy_metadata_with_exiftool(
     input_path: &Path,
     output_path: &Path,
     orientation_normalized: bool,
+    report_tool: super::ToolReporter<'_>,
 ) -> Result<(), String> {
     let (width, height) = image::image_dimensions(output_path).map_err(|e| {
         format!(
@@ -175,6 +179,7 @@ fn copy_metadata_with_exiftool(
         )
     })?;
 
+    report_tool("exiftool");
     let mut command = ProcessCommand::new("exiftool");
     command
         .arg("-overwrite_original")

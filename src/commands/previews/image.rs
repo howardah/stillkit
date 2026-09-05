@@ -20,22 +20,17 @@ pub(super) fn generate_preview(
     input_path: &Path,
     output_path: &Path,
     options: PreviewOptions,
+    report_tool: crate::shared::ToolReporter<'_>,
 ) -> Result<(), String> {
-    let orientation_normalized = generate_preview_image(
-        input_path,
-        output_path,
-        options.max_dimension,
-        options.format,
-        options.full,
-        options.quality,
-        options.pipeline,
-    )?;
+    let orientation_normalized =
+        generate_preview_image(input_path, output_path, options, report_tool)?;
     if !options.clear_metadata {
         crate::shared::metadata::copy_metadata(
             input_path,
             output_path,
             orientation_normalized,
             options.pipeline,
+            report_tool,
         )?;
     }
     Ok(())
@@ -62,32 +57,36 @@ pub(super) fn do_generate_preview(
             quality,
             pipeline: Pipeline::Auto,
         },
+        &|_| {},
     )
 }
 
 fn generate_preview_image(
     input_path: &Path,
     output_path: &Path,
-    max_dimension: u32,
-    format: OutputFormat,
-    full: bool,
-    quality: u8,
-    pipeline: Pipeline,
+    options: PreviewOptions,
+    report_tool: crate::shared::ToolReporter<'_>,
 ) -> Result<bool, String> {
     let normalized = super::raw::is_raw(input_path) || is_heic_family(input_path);
     let img = if normalized {
-        super::raw::load_preview(input_path, max_dimension, full, pipeline)?
-            .to_rgb8()
-            .into()
+        super::raw::load_preview(
+            input_path,
+            options.max_dimension,
+            options.full,
+            options.pipeline,
+            report_tool,
+        )?
+        .to_rgb8()
+        .into()
     } else {
         load_image(input_path)?
     };
 
-    let resized: DynamicImage = if full {
+    let resized: DynamicImage = if options.full {
         img
     } else {
         let (width, height) = img.dimensions();
-        let (new_width, new_height) = calculate_dimensions(width, height, max_dimension);
+        let (new_width, new_height) = calculate_dimensions(width, height, options.max_dimension);
 
         if new_width < width || new_height < height {
             img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
@@ -96,7 +95,7 @@ fn generate_preview_image(
         }
     };
 
-    let bytes = encode_image(&resized, format, quality)
+    let bytes = encode_image(&resized, options.format, options.quality)
         .map_err(|e| format!("Failed to encode image {}: {}", input_path.display(), e))?;
 
     fs::write(output_path, &bytes).map_err(|e| {

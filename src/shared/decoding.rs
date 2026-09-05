@@ -42,17 +42,19 @@ pub(crate) fn load_preview(
     size: u32,
     full: bool,
     pipeline: super::Pipeline,
+    report_tool: super::ToolReporter<'_>,
 ) -> Result<DynamicImage, String> {
     let path = fs::canonicalize(path)
         .map_err(|e| format!("Failed to resolve RAW input {}: {e}", path.display()))?;
     let mut errors = Vec::new();
     if pipeline.allows_tools() {
         #[cfg(target_os = "macos")]
-        match with_sips(&path, size, full) {
+        match with_sips(&path, size, full, report_tool) {
             Ok(image) => return Ok(image),
             Err(error) => errors.push(error),
         }
         for program in ["magick", "convert"] {
+            report_tool(program);
             let mut command = Command::new(program);
             let mut first_frame = path.as_os_str().to_os_string();
             first_frame.push("[0]");
@@ -135,7 +137,12 @@ pub(crate) fn load_native(path: &Path) -> Result<DynamicImage, String> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn with_sips(path: &Path, size: u32, full: bool) -> Result<DynamicImage, String> {
+pub(crate) fn with_sips(
+    path: &Path,
+    size: u32,
+    full: bool,
+    report_tool: super::ToolReporter<'_>,
+) -> Result<DynamicImage, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     // An exclusively created directory isolates concurrent conversions and is
@@ -160,6 +167,7 @@ pub(crate) fn with_sips(path: &Path, size: u32, full: bool) -> Result<DynamicIma
     }
     let directory = Cleanup(directory);
     let output = directory.0.join("preview.png");
+    report_tool("sips");
     let mut command = Command::new("sips");
     command.args(["-s", "format", "png"]);
     if !full {

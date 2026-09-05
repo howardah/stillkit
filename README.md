@@ -154,6 +154,8 @@ benchmarking; resized RAW previews may still use their embedded JPEG, so use
 
 Metadata copying uses `exiftool` when available, with a Rust fallback for standard
 photographic EXIF/GPS fields, supported ICC/XMP profiles, and JPEG/PNG IPTC data.
+While an external tool is running, the progress label identifies it, for example
+`Generating previews [sips]` or `Adjusting exposure [exiftool]`.
 The fallback updates EXIF dimensions and orientation. Proprietary maker notes,
 RAW storage tags, and embedded thumbnails are not copied by the Rust metadata
 writer; install ExifTool if preserving proprietary metadata is important.

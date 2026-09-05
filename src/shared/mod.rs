@@ -2,6 +2,8 @@ pub(crate) mod decoding;
 pub(crate) mod image;
 pub(crate) mod metadata;
 
+pub(crate) type ToolReporter<'a> = &'a (dyn Fn(&str) + Sync);
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) enum Pipeline {
     #[default]

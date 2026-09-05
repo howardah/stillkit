@@ -12,14 +12,15 @@ pub(super) fn apply_exposure(
     adjustment: f64,
     pipeline: Pipeline,
     replace: bool,
+    report_tool: crate::shared::ToolReporter<'_>,
 ) -> Result<(), String> {
     let factor = exposure_factor(adjustment)?;
     let input = fs::canonicalize(input)
         .map_err(|e| format!("Failed to resolve {}: {e}", input.display()))?;
     let staging = staged::Output::new(output)?;
     let temporary = staging.path();
-    convert(&input, temporary, factor, pipeline)?;
-    metadata::copy_metadata(&input, temporary, true, pipeline)?;
+    convert(&input, temporary, factor, pipeline, report_tool)?;
+    metadata::copy_metadata(&input, temporary, true, pipeline, report_tool)?;
     staging.persist(output, replace)
 }
 
@@ -33,12 +34,18 @@ pub(super) fn exposure_factor(adjustment: f64) -> Result<f64, String> {
     Ok(factor)
 }
 
-fn convert(input: &Path, output: &Path, factor: f64, pipeline: Pipeline) -> Result<(), String> {
+fn convert(
+    input: &Path,
+    output: &Path,
+    factor: f64,
+    pipeline: Pipeline,
+    report_tool: crate::shared::ToolReporter<'_>,
+) -> Result<(), String> {
     let mut errors = Vec::new();
     if pipeline.allows_tools() {
         #[cfg(target_os = "macos")]
         if is_heic_family(input) || decoding::is_raw(input) {
-            match decoding::with_sips(input, 0, true) {
+            match decoding::with_sips(input, 0, true, report_tool) {
                 Ok(mut image) => {
                     multiply(&mut image, factor);
                     return encode(&image, output);
@@ -47,6 +54,7 @@ fn convert(input: &Path, output: &Path, factor: f64, pipeline: Pipeline) -> Resu
             }
         }
         for program in ["magick", "convert"] {
+            report_tool(program);
             match with_magick(program, input, output, factor) {
                 Ok(()) => return Ok(()),
                 Err(error) => errors.push(error),

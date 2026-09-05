@@ -227,12 +227,16 @@ pub fn run(matches: &ArgMatches) {
                 }
             }
 
+            let report_tool = |tool: &str| {
+                progress.set_message(format!("Adjusting exposure [{tool}]"));
+            };
             let result = processing::apply_exposure(
                 &job.input,
                 output,
                 job.adjustment,
                 pipeline,
                 mode == OutputMode::Overwrite || force,
+                &report_tool,
             );
             progress.inc(1);
             result.map(|_| output.clone())
