@@ -131,7 +131,8 @@ This keeps the original image dimensions and only converts into the selected pre
 By default previews keep the source photo metadata; add `--clear-metadata` to strip it.
 Metadata-preserving previews use `exiftool`. On macOS, HEIC/HEIF/HIF JPEG previews use Apple's
 hardware-accelerated `sips` when available, then fall back to the native Rust thumbnail path or
-ImageMagick. `--clear-metadata` uses ImageMagick so metadata stripping remains exact.
+ImageMagick. Camera RAW previews such as CR2 are decoded through ImageMagick. `--clear-metadata`
+uses ImageMagick so metadata stripping remains exact.
 
 **Adjust exposure**
 

@@ -555,9 +555,18 @@ fn generate_preview_image(
 
         // HEIC-family files benefit from ImageMagick's decoder and auto-orientation
         // when available. This is also the compatibility fallback for the native path.
-        if try_generate_heic_preview_with_magick(input_path, output_path, max_dimension, full)? {
+        if try_generate_magick_preview(input_path, output_path, max_dimension, full)? {
             return Ok(true);
         }
+    }
+
+    // The `image` crate does not decode camera RAW containers such as CR2.
+    // Use ImageMagick for these files, which delegates decoding to the RAW
+    // support installed on the host (typically LibRaw/dcraw).
+    if has_raw_extension(input_path)
+        && try_generate_magick_preview(input_path, output_path, max_dimension, full)?
+    {
+        return Ok(true);
     }
 
     let img = load_image(input_path)?;
@@ -735,13 +744,36 @@ fn has_heic_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn try_generate_heic_preview_with_magick(
+fn has_raw_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "arw" | "cr2" | "nef" | "raf" | "dng"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn try_generate_magick_preview(
     input_path: &Path,
     output_path: &Path,
     max_dimension: u32,
     full: bool,
 ) -> Result<bool, String> {
-    let mut command = ProcessCommand::new("magick");
+    // ImageMagick 7 uses `magick`; ImageMagick 6 commonly installs the
+    // equivalent `convert` command instead.
+    let command_name = if ProcessCommand::new("magick")
+        .arg("-version")
+        .output()
+        .is_ok()
+    {
+        "magick"
+    } else {
+        "convert"
+    };
+    let mut command = ProcessCommand::new(command_name);
     command.arg(input_path).arg("-auto-orient").arg("-strip");
 
     if !full {
@@ -962,6 +994,14 @@ mod tests {
     }
 
     #[test]
+    fn supports_cr2_as_a_raw_image() {
+        assert!(is_supported_image(Path::new("photo.cr2")));
+        assert!(is_supported_image(Path::new("photo.CR2")));
+        assert!(has_raw_extension(Path::new("photo.CR2")));
+        assert!(!has_raw_extension(Path::new("photo.jpg")));
+    }
+
+    #[test]
     fn previews_heic_without_whiteout_when_magick_is_available() {
         if !magick_available() {
             return;
@@ -972,7 +1012,7 @@ mod tests {
             std::env::temp_dir().join(format!("stillkit-preview-heic-{}.jpg", process::id()));
         let _ = fs::remove_file(&output_path);
 
-        try_generate_heic_preview_with_magick(&path, &output_path, 1000, false)
+        try_generate_magick_preview(&path, &output_path, 1000, false)
             .expect("ImageMagick HEIC preview should succeed");
 
         let image = image::open(&output_path).expect("generated preview should be readable");
