@@ -15,6 +15,22 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
     // Collect all image files
     let image_paths = collect_image_files(&config.input_dir, config.recursive);
 
+    // RAW+JPEG pairs commonly share a stem. Never let parallel conversions race
+    // to overwrite the same destination, even when it does not exist yet.
+    let mut destinations = std::collections::HashMap::new();
+    for path in &image_paths {
+        let output = preview_output_path(config, path);
+        if let Some(previous) = destinations.insert(output.clone(), path) {
+            eprintln!(
+                "Preview output collision: {} and {} both produce {}. Process the files separately or give them distinct names.",
+                previous.display(),
+                path.display(),
+                output.display()
+            );
+            return;
+        }
+    }
+
     if image_paths.is_empty() {
         println!("No image files found in {}.", config.input_dir.display());
         return;
@@ -208,7 +224,7 @@ fn collect_image_files(dir: &Path, recursive: bool) -> Vec<PathBuf> {
         for entry in walkdir::WalkDir::new(dir).into_iter().flatten() {
             let path = entry.path();
             if path.is_file() {
-                if is_supported_image(path) {
+                if is_supported_image(path) || super::raw::is_raw(path) {
                     result.push(path.to_path_buf());
                 }
                 progress.inc(1);
@@ -218,7 +234,7 @@ fn collect_image_files(dir: &Path, recursive: bool) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
-                if is_supported_image(&path) {
+                if is_supported_image(&path) || super::raw::is_raw(&path) {
                     result.push(path);
                 }
                 progress.inc(1);
@@ -227,6 +243,7 @@ fn collect_image_files(dir: &Path, recursive: bool) -> Vec<PathBuf> {
     }
 
     progress.finish_with_message(format!("Found {} images", result.len()));
+    result.sort();
     result
 }
 
@@ -235,5 +252,46 @@ pub(super) fn preview_size_label(max_dimension: u32, full: bool) -> String {
         "full size".to_string()
     } else {
         format!("max dimension: {max_dimension}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_jpeg_collision_leaves_inputs_and_outputs_untouched() {
+        let directory = std::env::temp_dir().join(format!(
+            "still-preview-collision-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("photo.CR2"), b"original raw").unwrap();
+        fs::write(directory.join("photo.jpg"), b"original jpeg").unwrap();
+        let config = PreviewConfig {
+            input_dir: directory.clone(),
+            output_dir: directory.join("output"),
+            max_dimension: 1000,
+            format: super::super::OutputFormat::Jpeg,
+            recursive: false,
+            full: false,
+            clear_metadata: true,
+            quality: 75,
+        };
+        generate_previews(&config);
+        assert!(!config.output_dir.exists());
+        assert_eq!(
+            fs::read(directory.join("photo.CR2")).unwrap(),
+            b"original raw"
+        );
+        assert_eq!(
+            fs::read(directory.join("photo.jpg")).unwrap(),
+            b"original jpeg"
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 }

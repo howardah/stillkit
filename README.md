@@ -134,6 +134,22 @@ Metadata-preserving previews use `exiftool`. On macOS, HEIC/HEIF/HIF JPEG previe
 hardware-accelerated `sips` when available, then fall back to the native Rust thumbnail path or
 ImageMagick. `--clear-metadata` uses ImageMagick so metadata stripping remains exact.
 
+Camera RAW previews recognize CR2/CR3/CRW, NEF/NRW, ARW/SR2/SRF, RAF, DNG,
+ORF, RW2, PEF, SRW, RAW/RWL, 3FR/FFF, IIQ, MOS, MRW, ERF, KDC, and DCR
+(case-insensitive). Conversion tries macOS `sips`, then ImageMagick 7 `magick`,
+then ImageMagick 6 `convert`, continuing when a tool is missing or cannot decode
+the file. Camera support depends on the installed codecs; ImageMagick may also
+need a RAW delegate such as darktable or dcraw.
+
+If those tools fail, a built-in fallback extracts the largest decodable embedded
+JPEG that meets the requested preview size. This adds no dependencies and works
+with `--clear-metadata` without external tools, but does not develop RAW sensor
+data. Files without a sufficiently large embedded JPEG, and `--full`, require an
+external converter. All RAW paths support JPEG, PNG, and WebP output and the
+existing quality and metadata options; keeping metadata still requires `exiftool`.
+Batch generation rejects inputs that map to the same output (for example,
+`photo.CR2` and `photo.jpg`); process those separately or use distinct names.
+
 **Adjust exposure**
 
 Exposure adjustments use photographic stops: `+1` doubles brightness and `-1` halves it.

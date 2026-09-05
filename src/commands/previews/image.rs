@@ -85,7 +85,12 @@ fn generate_preview_image(
         }
     }
 
-    let img = load_image(input_path)?;
+    let raw = super::raw::is_raw(input_path);
+    let img = if raw {
+        super::raw::load_preview(input_path, max_dimension, full)?
+    } else {
+        load_image(input_path)?
+    };
 
     let resized: DynamicImage = if full {
         img
@@ -111,7 +116,7 @@ fn generate_preview_image(
         )
     })?;
 
-    Ok(false)
+    Ok(raw)
 }
 
 pub(super) fn encode_image(
