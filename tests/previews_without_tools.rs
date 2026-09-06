@@ -239,6 +239,86 @@ fn heic_without_external_tools() {
     assert_eq!(decoded.width().max(decoded.height()), 16);
 }
 
+#[test]
+#[ignore = "requires local demo/DSCF0656.HEIC; run with --release --ignored"]
+fn heic_no_deps_preserves_image_content() {
+    let dir = TestDir::new();
+    let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("demo/DSCF0656.HEIC");
+    let original = fs::read(&input).expect("place the original DSCF0656.HEIC in demo/");
+    let info = heic::ImageInfo::from_bytes(&original).unwrap();
+    assert_eq!((info.bit_depth, info.chroma_format), (10, 2));
+    let output = preview(&input, &dir.0, "png", &["--no-deps", "--clear-metadata"]);
+    let decoded = image::open(output).unwrap().to_rgb8();
+    assert_eq!(decoded.dimensions(), (16, 10));
+
+    // Regional RGB means from an independent ImageMagick/libheif decode.
+    // Dimensions alone passed with heic 0.1.4 even though the pixels were
+    // almost entirely white with colored bands. Check the whole scene, with
+    // tolerance for different color conversion and downsampling implementations.
+    let expected = [
+        [44, 33, 25],
+        [81, 62, 48],
+        [131, 108, 88],
+        [197, 177, 153],
+        [146, 132, 120],
+        [138, 116, 99],
+        [152, 133, 113],
+        [216, 200, 177],
+        [61, 46, 37],
+        [52, 36, 27],
+        [83, 74, 71],
+        [223, 212, 200],
+        [48, 36, 29],
+        [40, 26, 20],
+        [71, 58, 53],
+        [204, 186, 171],
+    ];
+    let regions = image::imageops::resize(&decoded, 4, 4, image::imageops::FilterType::Triangle);
+    for (index, (actual, expected)) in regions.pixels().zip(expected).enumerate() {
+        for channel in 0..3 {
+            assert!(
+                (i32::from(actual[channel]) - expected[channel]).abs() <= 30,
+                "region {index}, channel {channel}: got {}, expected {}",
+                actual[channel],
+                expected[channel]
+            );
+        }
+    }
+    assert_eq!(fs::read(input).unwrap(), original);
+}
+
+#[test]
+fn heic_422_10bit_previews_preserve_colors_without_tools() {
+    let dir = TestDir::new();
+    let input =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gradient-422-10bit.heic");
+    let original = fs::read(&input).unwrap();
+    let info = heic::ImageInfo::from_bytes(&original).unwrap();
+    assert_eq!((info.bit_depth, info.chroma_format), (10, 2));
+    for full in [false, true] {
+        let flags = if full {
+            vec!["--no-deps", "--clear-metadata", "--full"]
+        } else {
+            vec!["--no-deps", "--clear-metadata"]
+        };
+        let output = preview(&input, &dir.0.join(full.to_string()), "png", &flags);
+        let decoded = image::open(output).unwrap().to_rgb8();
+        let size = if full { 64 } else { 16 };
+        assert_eq!(decoded.dimensions(), (size, size));
+        for (x, y, pixel) in decoded.enumerate_pixels() {
+            let blue = 255.0 * f64::from(y) / f64::from(size - 1);
+            let expected = [255.0 - blue, 0.0, blue];
+            for channel in 0..3 {
+                assert!(
+                    (f64::from(pixel[channel]) - expected[channel]).abs() < 20.0,
+                    "full={full}, ({x},{y}), got {pixel:?}, expected {expected:?}"
+                );
+            }
+        }
+    }
+    assert_eq!(fs::read(input).unwrap(), original);
+}
+
 #[cfg(unix)]
 #[test]
 fn failed_accelerators_fall_through_to_imagemagick_six() {

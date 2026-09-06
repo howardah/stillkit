@@ -72,6 +72,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "almost-enough"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2040cad221332dbe816267e6f2b55032f53a297ceb4d97f8e612df471aa6dbc"
+dependencies = [
+ "enough",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -970,17 +979,29 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "heic"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b29598d5e2e04a70ae373c928adbdd36dc1119ffe14d53c4c11712f7d66a30a2"
+version = "0.2.0"
+source = "git+https://github.com/imazen/heic?rev=9e7f75617fb1e62e642ee34ee1ac21a5f068ab51#9e7f75617fb1e62e642ee34ee1ac21a5f068ab51"
 dependencies = [
  "archmage",
  "enough",
+ "heic-core",
  "magetypes",
  "memchr",
  "rayon",
  "safe_unaligned_simd",
  "ultrahdr-core",
+ "whereat",
+]
+
+[[package]]
+name = "heic-core"
+version = "0.2.0"
+source = "git+https://github.com/imazen/heic?rev=9e7f75617fb1e62e642ee34ee1ac21a5f068ab51#9e7f75617fb1e62e642ee34ee1ac21a5f068ab51"
+dependencies = [
+ "archmage",
+ "enough",
+ "magetypes",
+ "safe_unaligned_simd",
  "whereat",
 ]
 
@@ -2928,9 +2949,9 @@ checksum = "2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971"
 
 [[package]]
 name = "ultrahdr-core"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "964a038e0f75524ef9bd01ee6bda6d2457a3b6c1ca8df22478b9bb94b3547669"
+checksum = "1d65bd22a90785bb7360076b599ffbc201aef2c5817d2e5f37f37357829d476e"
 dependencies = [
  "archmage",
  "bytemuck",
@@ -2940,6 +2961,9 @@ dependencies = [
  "magetypes",
  "thiserror 2.0.18",
  "wide",
+ "zencodec",
+ "zenpixels",
+ "zentone",
 ]
 
 [[package]]
@@ -3551,6 +3575,40 @@ name = "y4m"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
+
+[[package]]
+name = "zencodec"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be4b0d4108a8f062c85090bf8d0e6dd00fea976ffacc0e4f3cb6b03284a75531"
+dependencies = [
+ "almost-enough",
+ "enough",
+ "whereat",
+ "zenpixels",
+]
+
+[[package]]
+name = "zenpixels"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5851fd39b312749a3c367a0cd3522bd95d43276cfa613e9c18df748447cef3a8"
+dependencies = [
+ "bytemuck",
+ "whereat",
+]
+
+[[package]]
+name = "zentone"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c602cc9010340287fd4ffcb2cd1ae9f6a665d37db59f0b9578352788cf8b304"
+dependencies = [
+ "archmage",
+ "libm",
+ "linear-srgb",
+ "magetypes",
+]
 
 [[package]]
 name = "zerocopy"

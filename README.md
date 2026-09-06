@@ -233,6 +233,11 @@ original intact.
 
 Rust HEIC decoding is included in the default build. The existing `native-heic`
 feature enables the decoder's parallel processing (`cargo install --path . --features native-heic`).
+The decoder is pinned to an upstream Git revision containing the
+[4:2:2 chroma fix](https://github.com/imazen/heic/issues/48): published `heic` 0.1.x
+can produce white areas and colored bands on 10-bit Fujifilm images with `--no-deps`.
+Builds fetch this pinned source from GitHub; only its Rust backend is enabled.
+Replace the Git pin with a released version once that fix is published.
 The `heic` dependency is AGPL-or-commercial licensed even without that feature;
 `rawler` is LGPL-2.1, and `img-parts` is MIT/Apache-2.0. Review these licenses when
 distributing binaries. Rawler adds a camera database and decoding dependencies;
