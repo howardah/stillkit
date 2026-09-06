@@ -24,6 +24,32 @@ fn no_deps_is_optional_for_previews() {
 }
 
 #[test]
+fn embedded_preview_opt_out_preserves_existing_cli_forms() {
+    assert!(
+        !subcommand()
+            .try_get_matches_from(["previews"])
+            .unwrap()
+            .get_flag("no-embedded-preview")
+    );
+    for flags in [
+        vec!["--no-deps"],
+        vec!["--full"],
+        vec!["--max-size", "full"],
+        vec!["--tool", "magick"],
+        vec!["--tool", "sips"],
+    ] {
+        let matches = subcommand()
+            .try_get_matches_from(
+                ["previews", "--no-embedded-preview"]
+                    .into_iter()
+                    .chain(flags),
+            )
+            .unwrap();
+        assert!(matches.get_flag("no-embedded-preview"));
+    }
+}
+
+#[test]
 fn tool_accepts_supported_converters_and_conflicts_with_no_deps() {
     for tool in ["magick", "sips"] {
         let matches = subcommand()

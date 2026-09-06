@@ -287,6 +287,7 @@ mod tests {
             format: super::super::OutputFormat::Jpeg,
             recursive: false,
             full: false,
+            use_embedded: true,
             clear_metadata: true,
             quality: 75,
             pipeline: crate::shared::Pipeline::Auto,

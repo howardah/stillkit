@@ -11,6 +11,7 @@ pub(super) struct PreviewOptions {
     pub max_dimension: u32,
     pub format: OutputFormat,
     pub full: bool,
+    pub use_embedded: bool,
     pub clear_metadata: bool,
     pub quality: u8,
     pub pipeline: Pipeline,
@@ -53,6 +54,7 @@ pub(super) fn do_generate_preview(
             max_dimension,
             format,
             full,
+            use_embedded: true,
             clear_metadata,
             quality,
             pipeline: Pipeline::Auto,
@@ -69,15 +71,9 @@ fn generate_preview_image(
 ) -> Result<bool, String> {
     let normalized = super::raw::is_raw(input_path) || is_heic_family(input_path);
     let img = if normalized {
-        super::raw::load_preview(
-            input_path,
-            options.max_dimension,
-            options.full,
-            options.pipeline,
-            report_tool,
-        )?
-        .to_rgb8()
-        .into()
+        super::decoding::load_preview(input_path, options, report_tool)?
+            .into_rgb8()
+            .into()
     } else {
         load_image(input_path)?
     };

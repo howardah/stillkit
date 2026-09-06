@@ -3,7 +3,10 @@ use clap::{Arg, ArgAction, Command};
 use std::path::{Path, PathBuf};
 
 mod batch;
+mod decoding;
+mod embedded;
 mod image;
+mod jpeg_validation;
 use crate::shared::{Pipeline, decoding as raw};
 #[cfg(test)]
 mod tests;
@@ -55,6 +58,7 @@ struct PreviewConfig {
     format: OutputFormat,
     recursive: bool,
     full: bool,
+    use_embedded: bool,
     clear_metadata: bool,
     quality: u8,
     pipeline: Pipeline,
@@ -77,6 +81,7 @@ impl PreviewConfig {
             max_dimension: self.max_dimension,
             format: self.format,
             full: self.full,
+            use_embedded: self.use_embedded,
             clear_metadata: self.clear_metadata,
             quality: self.quality,
             pipeline: self.pipeline,
@@ -87,6 +92,12 @@ impl PreviewConfig {
 pub fn subcommand() -> Command {
     Command::new("previews")
         .about("Generate preview images")
+        .arg(
+            Arg::new("no-embedded-preview")
+                .long("no-embedded-preview")
+                .help("Disable embedded HEIC/RAW previews in the built-in decoder")
+                .action(ArgAction::SetTrue),
+        )
         .arg(
             Arg::new("no-deps")
                 .long("no-deps")
@@ -206,6 +217,7 @@ pub fn run(matches: &clap::ArgMatches) {
         format,
         recursive,
         full,
+        use_embedded: !matches.get_flag("no-embedded-preview"),
         clear_metadata,
         quality,
         pipeline: match matches.get_one::<String>("tool").map(String::as_str) {

@@ -9,19 +9,23 @@ use std::{
 };
 
 mod common;
+#[path = "common/heic.rs"]
+mod heic_fixture;
 use common::{TestDir, dng, field};
 
 fn preview(input: &Path, output: &Path, format: &str, flags: &[&str]) -> PathBuf {
-    let result = Command::new(env!("CARGO_BIN_EXE_still"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_still"));
+    command
         .env("PATH", "")
         .arg("previews")
         .arg(input)
         .arg("-o")
         .arg(output)
-        .args(["-f", format, "-s", "16"])
-        .args(flags)
-        .output()
-        .unwrap();
+        .args(["-f", format]);
+    if !flags.contains(&"--max-size") {
+        command.args(["-s", "16"]);
+    }
+    let result = command.args(flags).output().unwrap();
     assert!(
         result.status.success(),
         "{}",
@@ -247,7 +251,12 @@ fn heic_no_deps_preserves_image_content() {
     let original = fs::read(&input).expect("place the original DSCF0656.HEIC in demo/");
     let info = heic::ImageInfo::from_bytes(&original).unwrap();
     assert_eq!((info.bit_depth, info.chroma_format), (10, 2));
-    let output = preview(&input, &dir.0, "png", &["--no-deps", "--clear-metadata"]);
+    let output = preview(
+        &input,
+        &dir.0,
+        "png",
+        &["--no-deps", "--clear-metadata", "--no-embedded-preview"],
+    );
     let decoded = image::open(output).unwrap().to_rgb8();
     assert_eq!(decoded.dimensions(), (16, 10));
 
@@ -359,4 +368,77 @@ fn failed_accelerators_fall_through_to_imagemagick_six() {
             "magick\nconvert\n"
         }
     );
+}
+
+#[test]
+fn heic_embedded_preview_selection_and_primary_fallback() {
+    use heic_fixture::{Thumbnail, with_thumbnails};
+    let dir = TestDir::new();
+    let mut corrupt = Thumbnail::green(32);
+    let sos = corrupt
+        .data
+        .windows(2)
+        .position(|bytes| bytes == [0xff, 0xda])
+        .unwrap();
+    let header_length = u16::from_be_bytes([corrupt.data[sos + 2], corrupt.data[sos + 3]]) as usize;
+    corrupt.data.truncate(sos + 2 + header_length + 1);
+    corrupt.data.extend([0xff, 0xd9]); // Even an EOI marker must not hide truncation.
+    let mut unlinked = Thumbnail::green(32);
+    unlinked.linked = false;
+    let mut wrong_dimensions = Thumbnail::green(32);
+    wrong_dimensions.dimensions = (64, 32);
+    let mut wrong_orientation = Thumbnail::green(32);
+    wrong_orientation.rotation = Some(1);
+    let cases = [
+        ("valid", vec![Thumbnail::green(32)], vec![], true),
+        (
+            "disabled",
+            vec![Thumbnail::green(32)],
+            vec!["--no-embedded-preview"],
+            false,
+        ),
+        ("full", vec![Thumbnail::green(32)], vec!["--full"], false),
+        (
+            "max-full",
+            vec![Thumbnail::green(32)],
+            vec!["--max-size", "full"],
+            false,
+        ),
+        ("missing", vec![], vec![], false),
+        ("small", vec![Thumbnail::green(8)], vec![], false),
+        ("unlinked", vec![unlinked], vec![], false),
+        ("dimensions", vec![wrong_dimensions], vec![], false),
+        ("orientation", vec![wrong_orientation], vec![], false),
+        (
+            "corrupt",
+            vec![Thumbnail {
+                data: corrupt.data.clone(),
+                ..Thumbnail::green(32)
+            }],
+            vec![],
+            false,
+        ),
+        (
+            "second-candidate",
+            vec![corrupt, Thumbnail::green(24)],
+            vec![],
+            true,
+        ),
+    ];
+    for (name, thumbnails, extra, uses_embedded) in cases {
+        let input = dir.0.join(format!("{name}.HeIc"));
+        let original = with_thumbnails(&thumbnails, None);
+        fs::write(&input, &original).unwrap();
+        let mut flags = vec!["--no-deps", "--clear-metadata"];
+        flags.extend(extra);
+        let output = preview(&input, &dir.0.join(name), "png", &flags);
+        let decoded = image::open(output).unwrap().to_rgb8();
+        let pixel = decoded.get_pixel(0, 0);
+        if uses_embedded {
+            assert!(pixel[1] > 180 && pixel[0] < 20, "{name}: {pixel:?}");
+        } else {
+            assert!(pixel[0] > 180 && pixel[1] < 20, "{name}: {pixel:?}");
+        }
+        assert_eq!(fs::read(input).unwrap(), original);
+    }
 }

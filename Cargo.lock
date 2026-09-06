@@ -2650,6 +2650,8 @@ dependencies = [
  "rayon",
  "walkdir",
  "webp",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

@@ -19,6 +19,9 @@ walkdir = "2"
 indicatif = "0.18.4"
 rayon = "1.10"
 image = "0.25"
+# Already used by image; direct access enables strict embedded-JPEG validation.
+zune-core = "0.5.1"
+zune-jpeg = "0.5.15"
 # Published 0.1.x corrupts 4:2:2 camera images; pin upstream's chroma decoding fix.
 heic = { git = "https://github.com/imazen/heic", rev = "9e7f75617fb1e62e642ee34ee1ac21a5f068ab51", default-features = false, features = ["std", "backend-rust"] }
 ratatui = "0.30.0"

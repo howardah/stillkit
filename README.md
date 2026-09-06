@@ -153,8 +153,28 @@ back to another decoder, and `sips` is available only on macOS. `--tool` and
 `--no-deps` cannot be used together.
 Add `--no-deps` to bypass `sips`, `magick`, `convert`, and `exiftool` entirely,
 even when installed. This selects the built-in codec and metadata pipeline for
-benchmarking; resized RAW previews may still use their embedded JPEG, so use
-`--full` when benchmarking full sensor development.
+benchmarking. Resized HEIC/HEIF/HIF previews can use a camera's embedded JPEG
+when it is explicitly linked to the primary image, complete, large enough, and
+compatible in aspect ratio, orientation, and color profile. Missing, corrupt,
+undersized, or unsupported previews fall back to full HEIC decoding. The fast
+path accepts baseline JPEGs; progressive JPEGs and ambiguous crops/transforms
+use the primary image. RAW previews may also use an embedded JPEG.
+
+Add `--no-embedded-preview` to disable these shortcuts while retaining your
+requested output size. `--full` and `--max-size full` always bypass embedded
+previews. This policy applies to the built-in decoder; external-tool selection
+and fallback order remain as described above. Embedded previews use the camera's
+JPEG rendering, so pixels may differ slightly from a full HEIC decode.
+
+```sh
+still previews ./photos --no-deps
+still previews ./photos --no-deps --no-embedded-preview
+```
+
+The embedded JPEG path accesses `zune-jpeg` and `zune-core` directly for decoder
+options and metadata. Both are already dependencies of `image` (MIT/Apache-2.0/Zlib);
+this adds no new decoder library or platform requirement. A baseline entropy
+check rejects incomplete scans that the JPEG decoder otherwise fills silently.
 
 Metadata copying uses `exiftool` when available, with a Rust fallback for standard
 photographic EXIF/GPS fields, supported ICC/XMP profiles, and JPEG/PNG IPTC data.

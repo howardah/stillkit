@@ -36,59 +36,8 @@ pub(crate) fn is_raw(path: &Path) -> bool {
 }
 
 // Decode tool output back to pixels so all formats share the same encoder and
-// metadata policy, including sips conversions requested with --clear-metadata.
-pub(crate) fn load_preview(
-    path: &Path,
-    size: u32,
-    full: bool,
-    pipeline: super::Pipeline,
-    report_tool: super::ToolReporter<'_>,
-) -> Result<DynamicImage, String> {
-    let path = fs::canonicalize(path)
-        .map_err(|e| format!("Failed to resolve RAW input {}: {e}", path.display()))?;
-    let mut errors = Vec::new();
-    if matches!(pipeline, super::Pipeline::Sips) {
-        return load_with_sips(&path, size, full, report_tool);
-    }
-    if matches!(pipeline, super::Pipeline::Magick) {
-        return load_with_magick("magick", &path, size, full, report_tool);
-    }
-    if pipeline.allows_tools() {
-        #[cfg(target_os = "macos")]
-        match with_sips(&path, size, full, report_tool) {
-            Ok(image) => return Ok(image),
-            Err(error) => errors.push(error),
-        }
-        for program in ["magick", "convert"] {
-            match load_with_magick(program, &path, size, full, report_tool) {
-                Ok(image) => return Ok(image),
-                Err(error) => errors.push(error),
-            }
-        }
-    }
-    if !full && is_raw(&path) {
-        match embedded_preview(&path, size) {
-            Ok(image) => return Ok(image),
-            Err(error) => errors.push(error),
-        }
-    }
-    let native = if is_raw(&path) {
-        develop_raw(&path)
-    } else {
-        crate::shared::image::load_image(&path).map(|image| image.to_rgb8().into())
-    };
-    match native {
-        Ok(image) => return Ok(image),
-        Err(error) => errors.push(error),
-    }
-    Err(format!(
-        "Failed to generate preview for {} with external and built-in decoders: {}",
-        path.display(),
-        errors.join("; ")
-    ))
-}
-
-fn load_with_magick(
+// metadata policy, including conversions requested with --clear-metadata.
+pub(crate) fn load_with_magick(
     program: &str,
     path: &Path,
     size: u32,
@@ -114,12 +63,12 @@ fn load_with_magick(
         ));
     }
     image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
-        .map(|image| image.to_rgb8().into())
+        .map(|image| image.into_rgb8().into())
         .map_err(|e| format!("{program} returned invalid pixels: {e}"))
 }
 
 #[cfg(target_os = "macos")]
-fn load_with_sips(
+pub(crate) fn load_with_sips(
     path: &Path,
     size: u32,
     full: bool,
@@ -129,7 +78,7 @@ fn load_with_sips(
 }
 
 #[cfg(not(target_os = "macos"))]
-fn load_with_sips(
+pub(crate) fn load_with_sips(
     _path: &Path,
     _size: u32,
     _full: bool,
@@ -230,10 +179,10 @@ pub(crate) fn with_sips(
         .map_err(|e| format!("sips orientation: {e}"))?;
     let mut image = DynamicImage::from_decoder(decoder).map_err(|e| format!("sips output: {e}"))?;
     image.apply_orientation(orientation);
-    Ok(image.to_rgb8().into())
+    Ok(image.into_rgb8().into())
 }
 
-fn embedded_preview(path: &Path, size: u32) -> Result<DynamicImage, String> {
+pub(crate) fn embedded_preview(path: &Path, size: u32) -> Result<DynamicImage, String> {
     let data = fs::read(path).map_err(|e| format!("Cannot read RAW file: {e}"))?;
     decode_embedded(data, size)
 }
