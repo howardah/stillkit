@@ -3,7 +3,7 @@
 /** Compare release binaries without touching source images or existing previews.
  *
  * Example:
- *   bun scripts/benchmark_previews.ts demo/DSCF0656.HEIC \
+ *   bun scripts/benchmark_previews.ts bench/DSCF0656.HEIC \
  *     /tmp/still-before target/release/still
  *
  * Use --copies 17 for a repeated-sample batch, not a diverse-photo benchmark.
