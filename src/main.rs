@@ -6,7 +6,7 @@ mod shared;
 use commands::{classify, exposure, organize, previews, rate};
 
 fn cli() -> Command {
-    Command::new("pht")
+    Command::new("still")
         .about("Classify files and organize photos")
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand_required(false)
