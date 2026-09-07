@@ -176,6 +176,12 @@ options and metadata. Both are already dependencies of `image` (MIT/Apache-2.0/Z
 this adds no new decoder library or platform requirement. A baseline entropy
 check rejects incomplete scans that the JPEG decoder otherwise fills silently.
 
+RGB8 previews use portable CPU-accelerated Lanczos3 resizing through
+`fast_image_resize` (MIT/Apache-2.0), with runtime SIMD detection and a scalar
+fallback. Other pixel types retain the existing resizer. No GPU, external program,
+or new flag is required. See [Preview performance](PREVIEW_PERFORMANCE.md) for
+benchmarks, correctness safeguards, and macOS/Linux/Windows acceleration findings.
+
 Metadata copying uses `exiftool` when available, with a Rust fallback for standard
 photographic EXIF/GPS fields, supported ICC/XMP profiles, and JPEG/PNG IPTC data.
 While an external tool is running, the progress label identifies it, for example

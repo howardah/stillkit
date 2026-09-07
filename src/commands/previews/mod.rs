@@ -7,6 +7,7 @@ mod decoding;
 mod embedded;
 mod image;
 mod jpeg_validation;
+mod resize;
 use crate::shared::{Pipeline, decoding as raw};
 #[cfg(test)]
 mod tests;

@@ -1,7 +1,7 @@
 use super::OutputFormat;
 use crate::shared::Pipeline;
 use crate::shared::image::{is_heic_family, load_image};
-use image::{DynamicImage, GenericImageView, ImageEncoder};
+use image::{DynamicImage, ImageEncoder};
 #[cfg(test)]
 use std::process::Command as ProcessCommand;
 use std::{fs, io::Cursor, path::Path};
@@ -78,18 +78,7 @@ fn generate_preview_image(
         load_image(input_path)?
     };
 
-    let resized: DynamicImage = if options.full {
-        img
-    } else {
-        let (width, height) = img.dimensions();
-        let (new_width, new_height) = calculate_dimensions(width, height, options.max_dimension);
-
-        if new_width < width || new_height < height {
-            img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
-        } else {
-            img
-        }
-    };
+    let resized = super::resize::preview(img, options.max_dimension, options.full);
 
     let bytes = encode_image(&resized, options.format, options.quality)
         .map_err(|e| format!("Failed to encode image {}: {}", input_path.display(), e))?;
@@ -194,13 +183,7 @@ pub(super) fn try_generate_heic_preview_with_native(
         })?;
     let image = DynamicImage::ImageRgb8(image);
 
-    let (width, height) = image.dimensions();
-    let (new_width, new_height) = calculate_dimensions(width, height, max_dimension);
-    let resized = if new_width < width || new_height < height {
-        image.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
-    } else {
-        image
-    };
+    let resized = super::resize::preview(image, max_dimension, full);
 
     let bytes = encode_image(&resized, format, quality).map_err(|e| {
         format!(
@@ -264,17 +247,4 @@ pub(super) fn try_generate_heic_preview_with_magick(
         input_path.display(),
         stderr.trim()
     ))
-}
-
-/// Calculate new dimensions maintaining aspect ratio
-fn calculate_dimensions(width: u32, height: u32, max_dimension: u32) -> (u32, u32) {
-    if width > height {
-        let new_width = max_dimension;
-        let new_height = (height as f32 * (new_width as f32 / width as f32)) as u32;
-        (new_width, new_height.max(1))
-    } else {
-        let new_height = max_dimension;
-        let new_width = (width as f32 * (new_height as f32 / height as f32)) as u32;
-        (new_width.max(1), new_height)
-    }
 }
