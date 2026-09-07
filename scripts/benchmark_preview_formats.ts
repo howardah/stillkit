@@ -17,7 +17,7 @@ type Result = {
   binary: string;
   size: number;
   primary_only: boolean;
-  tool: "no-deps" | "sips" | "magick";
+  tool: "auto" | "no-deps" | "sips" | "magick";
   threads: string;
   median_seconds: number;
   seconds: number[];
@@ -92,8 +92,8 @@ function parseArgs(args: string[]): {
       }
       if (values.length === 0) fail(`${argument} requires at least one value`);
       if (argument === "--tools") {
-        if (values.some((value) => !["no-deps", "sips", "magick"].includes(value))) {
-          fail("--tools values must be no-deps, sips, or magick");
+        if (values.some((value) => !["auto", "no-deps", "sips", "magick"].includes(value))) {
+          fail("--tools values must be auto, no-deps, sips, or magick");
         }
         tools = values;
       } else {
@@ -104,8 +104,8 @@ function parseArgs(args: string[]): {
     fail(`unknown option ${argument}`);
   }
 
-  const selected = tools ?? ["no-deps", "sips", "magick"];
-  const available = selected.filter((tool) => tool === "no-deps" || Bun.which(tool) !== null);
+  const selected = tools ?? ["auto", "no-deps", "sips", "magick"];
+  const available = selected.filter((tool) => ["auto", "no-deps"].includes(tool) || Bun.which(tool) !== null);
   for (const tool of selected.filter((tool) => !available.includes(tool))) {
     console.error(`Skipping unavailable tool: ${tool}`);
   }
@@ -159,6 +159,7 @@ function table(rows: string[][]): string {
 
 function decodePath(row: Row): string {
   if (row.format === "JPG") return "Built-in";
+  if (row.tool === "auto") return "Automatic";
   if (row.tool !== "no-deps") return "External tool";
   return row.primary_only ? "Primary" : "Embedded allowed";
 }

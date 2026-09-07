@@ -142,9 +142,12 @@ You can also write `--max-size full`; `--full` remains available as a shorthand.
 Use `--quality 0..100` (or `-q`) to control JPEG and WebP compression; the default is 75.
 By default previews keep the source photo metadata; add `--clear-metadata` to strip it.
 Preview generation requires no external programs, including when keeping metadata or using
-`--full`. For HEIC/HEIF/HIF and camera RAW, it tries macOS `sips`, ImageMagick 7
-`magick`, and ImageMagick 6 `convert`, in that order, before using built-in Rust
-decoding. Missing programs and conversion failures continue to the next backend.
+`--full`. For resized HEIC/HEIF/HIF and camera RAW, automatic mode first tries a suitable
+built-in embedded JPEG because that is faster than launching an external decoder. On macOS,
+primary decoding then tries `sips`. HEIC primary decoding tries built-in Rust before ImageMagick
+because it is faster in the reference benchmark; RAW primary decoding retains the tool order
+`sips`, ImageMagick 7 `magick`, ImageMagick 6 `convert`, then built-in Rust. Missing programs and
+conversion failures continue to the next backend.
 This also applies with `--clear-metadata`: decoded pixels pass through the Rust
 output encoder, which strips source metadata.
 Use `--tool magick` or `--tool sips` to force that converter for RAW and
@@ -162,8 +165,8 @@ use the primary image. RAW previews may also use an embedded JPEG.
 
 Add `--no-embedded-preview` to disable these shortcuts while retaining your
 requested output size. `--full` and `--max-size full` always bypass embedded
-previews. This policy applies to the built-in decoder; external-tool selection
-and fallback order remain as described above. Embedded previews use the camera's
+previews. This policy applies to the built-in decoder; automatic and forced tool
+selection remain as described above. Embedded previews use the camera's
 JPEG rendering, so pixels may differ slightly from a full HEIC decode.
 
 ```sh

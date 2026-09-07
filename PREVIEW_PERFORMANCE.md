@@ -57,9 +57,10 @@ these directly with the user's batch or infer Windows/Linux performance.
   `--max-size full` always request the primary image. Smaller sources are not
   upscaled. The shortcut is not a promise that camera-rendered and primary pixels
   are identical.
-- Forced external tools bypass the built-in shortcut. Automatic processing keeps
-  its existing external-tool order: `sips` on macOS, then ImageMagick, then built-in
-  decoding. `--no-deps` selects built-in processing.
+- Forced external tools bypass the built-in shortcut. Automatic processing tries
+  eligible built-in embedded previews first. On macOS it then tries `sips`; HEIC
+  primary decoding prefers built-in decoding over ImageMagick, while RAW retains
+  ImageMagick before its built-in primary decoder. `--no-deps` selects built-in processing.
 - Default HEIC decoding is pure Rust. The existing optional `native-heic` feature
   enables decoder parallelism; it does not select a GPU backend. Batch processing
   already uses Rayon. Feature defaults and distribution assumptions stay unchanged.
@@ -208,11 +209,59 @@ Validation completed:
 - The new resizer enables only `std`, not its optional Rayon feature. No generated
   media or benchmark binaries belong in the source changes.
 
+## Format-aware backend selection experiment
+
+Measured on the same macOS/Intel machine on 2026-09-07 with the default-feature release binary,
+one warm-up and five measured single-file runs. These medians preserve metadata and include
+process startup and file I/O. The unchanged binary was copied before implementation. The format
+benchmark showed which built-in paths should precede external tools:
+
+| Input / maximum size | Built-in | `sips` | ImageMagick | Preferred automatic path |
+| --- | ---: | ---: | ---: | --- |
+| HEIC, 1000 px, embedded allowed | 86.7 ms | 671.0 ms | 3.705 s | Built-in embedded |
+| HEIC, 2000 px | 3.916 s | 819.7 ms | 5.288 s | `sips` |
+| RAF, 1000 px, embedded allowed | 338.4 ms | failed | failed | Built-in embedded |
+| RAF, 2000 px, embedded allowed | 384.8 ms | failed | failed | Built-in embedded |
+
+The implemented automatic order probes built-in embedded images first without triggering a full
+primary decode. If no suitable HEIC preview exists, macOS still gets the faster `sips` primary
+path. Built-in HEIC primary decoding now precedes ImageMagick on every platform because it won the
+measured comparison. Forced `--tool` behavior is unchanged.
+
+Direct alternating comparison of the preserved original and new binaries verified the automatic
+policy. These values include ExifTool startup, unlike the forced `--no-deps` rows above:
+
+| Input / maximum size | Original automatic | New automatic | Change |
+| --- | ---: | ---: | ---: |
+| HEIC, 1000 px | 691.0 ms | 507.2 ms | 26.6% faster |
+| HEIC, 2000 px | 833.9 ms | 831.1 ms | 0.3% faster |
+| RAF, 1000 px | 955.3 ms | 700.3 ms | 26.7% faster |
+| RAF, 2000 px | 976.3 ms | 749.7 ms | 23.2% faster |
+| JPEG, 1000 px | 708.3 ms | 701.4 ms | 1.0% faster |
+| JPEG, 2000 px | 774.7 ms | 773.4 ms | 0.2% faster |
+
+No unchanged path regressed beyond the 5% threshold. The release binary grew by 2,600 bytes
+(0.013%). The benchmark harness now supports `--tool auto` and avoids duplicate JPEG rows for the
+irrelevant embedded-preview toggle.
+
+### GPU and decoder parallelism follow-up
+
+The local Intel Iris Plus Graphics 655 supports Metal, but that alone does not make this camera
+sample GPU-decodable. Its 10-bit 4:2:2 HEVC primary image remains ineligible for the pinned
+VideoToolbox backend, which accepts 4:2:0 surfaces. Stillkit's enabled `backend-rust` has no GPU
+path, and `sips` does not expose whether ImageIO used hardware for an invocation. Consequently no
+portable or verifiable GPU change was made.
+
+As a supported CPU comparison, an opt-in `native-heic` build reduced the 1000-pixel primary-only
+HEIC median from 3.906 s to 1.708 s across three measured runs (56.3%). It also increased the
+release binary from 20,403,392 to 20,469,272 bytes. `sips` still won this primary workload, and the
+feature remains opt-in because its licensing/distribution assumptions require explicit review.
+
 ### Reproducing the measurements
 
 Preserve a release binary before changing the implementation, then build the new
-version with the same features and toolchain. The comparison script uses only
-Python's standard library, copies the source to a temporary directory, creates
+version with the same features and toolchain. The comparison script uses Bun's
+standard library, copies the source to a temporary directory, creates
 fresh outputs for every invocation, checks that all previews succeeded, and
 removes its own temporary directory afterward. Original media is never modified.
 It preserves metadata and uses JPEG quality 75. Binary order alternates between
@@ -220,8 +269,9 @@ runs to reduce systematic cache/thermal bias. Timings include process startup an
 filesystem work; compilation and initial input copying are excluded.
 
 ```sh
-python3 scripts/benchmark_previews.py demo/DSCF0656.HEIC /path/to/still-before target/release/still
-python3 scripts/benchmark_previews.py demo/DSCF0656.HEIC target/release/still --copies 4 --sizes 1000 --threads 1 2 4 default --primary-only
+bun scripts/benchmark_preview_formats.ts --tools auto no-deps sips magick
+bun scripts/benchmark_previews.ts bench/DSCF0656.HEIC /path/to/still-before target/release/still --tool auto
+bun scripts/benchmark_previews.ts bench/DSCF0656.HEIC target/release/still --copies 4 --sizes 1000 --threads 1 2 4 default --primary-only
 cargo test --release --bin still benchmark_camera_preview_stages -- --ignored --nocapture
 ```
 

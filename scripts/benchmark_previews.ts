@@ -30,7 +30,7 @@ type Options = {
   sizes: number[];
   threads: string[];
   primaryOnly: boolean;
-  tool: "no-deps" | "sips" | "magick";
+  tool: "auto" | "no-deps" | "sips" | "magick";
 };
 
 const usage = `Usage: bun scripts/benchmark_previews.ts <sample> <binary...> [options]
@@ -42,7 +42,7 @@ Options:
   --runs <count>         Measured runs after one warm-up (default: 5)
   --sizes <sizes...>     Maximum preview sizes (default: 1000 2000)
   --threads <values...>  Rayon thread counts or "default" (default: default)
-  --tool <tool>          Decoder backend: no-deps, sips, or magick (default: no-deps)
+  --tool <tool>          Decoder backend: auto, no-deps, sips, or magick (default: no-deps)
   --primary-only         Disable embedded previews for every run
   -h, --help             Show this help
 `;
@@ -84,8 +84,8 @@ function parseArgs(args: string[]): Options {
       options[argument === "--copies" ? "copies" : "runs"] = positiveInteger(value, argument);
     } else if (argument === "--tool") {
       const value = args[++index];
-      if (value !== "no-deps" && value !== "sips" && value !== "magick") {
-        fail("--tool must be no-deps, sips, or magick");
+      if (value !== "auto" && value !== "no-deps" && value !== "sips" && value !== "magick") {
+        fail("--tool must be auto, no-deps, sips, or magick");
       }
       options.tool = value;
     } else if (argument === "--sizes" || argument === "--threads") {
@@ -130,6 +130,16 @@ function median(values: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
 
+function supportsEmbeddedPreview(sample: string): boolean {
+  const extension = extname(sample).toLowerCase();
+  return [
+    ".heic", ".heif", ".hif", ".cr2", ".cr3", ".crw", ".nef", ".nrw",
+    ".arw", ".sr2", ".srf", ".raf", ".dng", ".orf", ".rw2", ".pef",
+    ".srw", ".raw", ".rwl", ".3fr", ".fff", ".iiq", ".mos", ".mrw",
+    ".erf", ".kdc", ".dcr",
+  ].includes(extension);
+}
+
 function main(): void {
   const options = parseArgs(Bun.argv.slice(2));
   console.log(JSON.stringify({
@@ -154,18 +164,20 @@ function main(): void {
       delete env.RAYON_NUM_THREADS;
       if (threads !== "default") env.RAYON_NUM_THREADS = threads;
       for (const size of options.sizes) {
-        const decodeModes = options.tool === "no-deps"
+        const decodeModes = options.tool === "no-deps" && supportsEmbeddedPreview(options.sample)
           ? (options.primaryOnly ? [true] : [false, true])
-          : [false];
+          : [options.primaryOnly];
         for (const primaryOnly of decodeModes) {
           const timings = new Map(options.binaries.map((binary) => [binary, [] as number[]]));
           for (let iteration = 0; iteration <= options.runs; iteration++) {
             const order = iteration % 2 === 0 ? options.binaries : options.binaries.toReversed();
             for (const binary of order) {
               const output = join(workspace, `output-${sequence++}`);
-              const pipelineArgs = options.tool === "no-deps"
-                ? ["--no-deps"]
-                : ["--tool", options.tool];
+              const pipelineArgs = options.tool === "auto"
+                ? []
+                : options.tool === "no-deps"
+                  ? ["--no-deps"]
+                  : ["--tool", options.tool];
               const command = [
                 binary,
                 "previews",
