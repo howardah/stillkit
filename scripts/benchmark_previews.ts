@@ -30,6 +30,7 @@ type Options = {
   sizes: number[];
   threads: string[];
   primaryOnly: boolean;
+  tool: "no-deps" | "sips" | "magick";
 };
 
 const usage = `Usage: bun scripts/benchmark_previews.ts <sample> <binary...> [options]
@@ -41,6 +42,7 @@ Options:
   --runs <count>         Measured runs after one warm-up (default: 5)
   --sizes <sizes...>     Maximum preview sizes (default: 1000 2000)
   --threads <values...>  Rayon thread counts or "default" (default: default)
+  --tool <tool>          Decoder backend: no-deps, sips, or magick (default: no-deps)
   --primary-only         Disable embedded previews for every run
   -h, --help             Show this help
 `;
@@ -66,6 +68,7 @@ function parseArgs(args: string[]): Options {
     sizes: [1000, 2000],
     threads: ["default"],
     primaryOnly: false,
+    tool: "no-deps",
   };
 
   for (let index = 0; index < args.length; index++) {
@@ -79,6 +82,12 @@ function parseArgs(args: string[]): Options {
       const value = args[++index];
       if (value === undefined) fail(`${argument} requires a value`);
       options[argument === "--copies" ? "copies" : "runs"] = positiveInteger(value, argument);
+    } else if (argument === "--tool") {
+      const value = args[++index];
+      if (value !== "no-deps" && value !== "sips" && value !== "magick") {
+        fail("--tool must be no-deps, sips, or magick");
+      }
+      options.tool = value;
     } else if (argument === "--sizes" || argument === "--threads") {
       const values: string[] = [];
       while (args[index + 1] !== undefined && !args[index + 1].startsWith("--")) {
@@ -145,13 +154,28 @@ function main(): void {
       delete env.RAYON_NUM_THREADS;
       if (threads !== "default") env.RAYON_NUM_THREADS = threads;
       for (const size of options.sizes) {
-        for (const primaryOnly of options.primaryOnly ? [true] : [false, true]) {
+        const decodeModes = options.tool === "no-deps"
+          ? (options.primaryOnly ? [true] : [false, true])
+          : [false];
+        for (const primaryOnly of decodeModes) {
           const timings = new Map(options.binaries.map((binary) => [binary, [] as number[]]));
           for (let iteration = 0; iteration <= options.runs; iteration++) {
             const order = iteration % 2 === 0 ? options.binaries : options.binaries.toReversed();
             for (const binary of order) {
               const output = join(workspace, `output-${sequence++}`);
-              const command = [binary, "previews", source, "--no-deps", "--max-size", `${size}`, "--output", output];
+              const pipelineArgs = options.tool === "no-deps"
+                ? ["--no-deps"]
+                : ["--tool", options.tool];
+              const command = [
+                binary,
+                "previews",
+                source,
+                ...pipelineArgs,
+                "--max-size",
+                `${size}`,
+                "--output",
+                output,
+              ];
               if (primaryOnly) command.push("--no-embedded-preview");
               const start = Bun.nanoseconds();
               const result = Bun.spawnSync(command, { env, stdout: "pipe", stderr: "pipe" });
@@ -173,6 +197,7 @@ function main(): void {
               binary,
               size,
               primary_only: primaryOnly,
+              tool: options.tool,
               threads,
               median_seconds: median(seconds),
               seconds,

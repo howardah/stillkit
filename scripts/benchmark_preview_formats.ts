@@ -17,6 +17,7 @@ type Result = {
   binary: string;
   size: number;
   primary_only: boolean;
+  tool: "no-deps" | "sips" | "magick";
   threads: string;
   median_seconds: number;
   seconds: number[];
@@ -25,6 +26,12 @@ type Result = {
 type Row = Result & {
   sample: string;
   format: string;
+};
+
+type BenchmarkRun = {
+  metadata?: Metadata;
+  rows: Row[];
+  failure?: { sample: string; tool: string; reason: string };
 };
 
 const usage = `Usage: bun scripts/benchmark_preview_formats.ts [options]
@@ -38,6 +45,7 @@ Options:
   --runs <count>         Measured runs after one warm-up (default: 5)
   --sizes <sizes...>     Maximum preview sizes (default: 1000 2000)
   --threads <values...>  Rayon thread counts or "default" (default: default)
+  --tools <tools...>     Backends to benchmark (default: available tools)
   --primary-only         Disable embedded previews for every run
   -h, --help             Show this help
 `;
@@ -47,8 +55,13 @@ function fail(message: string): never {
   process.exit(2);
 }
 
-function parseArgs(args: string[]): { output?: string; benchmarkArgs: string[] } {
+function parseArgs(args: string[]): {
+  output?: string;
+  benchmarkArgs: string[];
+  tools: string[];
+} {
   const benchmarkArgs: string[] = [];
+  let tools: string[] | undefined;
   let output: string | undefined;
 
   for (let index = 0; index < args.length; index++) {
@@ -72,33 +85,51 @@ function parseArgs(args: string[]): { output?: string; benchmarkArgs: string[] }
       benchmarkArgs.push(argument, value);
       continue;
     }
-    if (argument === "--sizes" || argument === "--threads") {
+    if (argument === "--sizes" || argument === "--threads" || argument === "--tools") {
       const values: string[] = [];
       while (args[index + 1] !== undefined && !args[index + 1].startsWith("-")) {
         values.push(args[++index]);
       }
       if (values.length === 0) fail(`${argument} requires at least one value`);
-      benchmarkArgs.push(argument, ...values);
+      if (argument === "--tools") {
+        if (values.some((value) => !["no-deps", "sips", "magick"].includes(value))) {
+          fail("--tools values must be no-deps, sips, or magick");
+        }
+        tools = values;
+      } else {
+        benchmarkArgs.push(argument, ...values);
+      }
       continue;
     }
     fail(`unknown option ${argument}`);
   }
 
-  return { output, benchmarkArgs };
+  const selected = tools ?? ["no-deps", "sips", "magick"];
+  const available = selected.filter((tool) => tool === "no-deps" || Bun.which(tool) !== null);
+  for (const tool of selected.filter((tool) => !available.includes(tool))) {
+    console.error(`Skipping unavailable tool: ${tool}`);
+  }
+  if (available.length === 0) fail("none of the selected tools are available");
+  return { output, benchmarkArgs, tools: available };
 }
 
 function runBenchmark(
   script: string,
   sample: string,
   binary: string,
+  tool: string,
   benchmarkArgs: string[],
-): { metadata: Metadata; rows: Row[] } {
-  console.error(`Benchmarking ${basename(sample)}...`);
-  const result = Bun.spawnSync([process.execPath, script, sample, binary, ...benchmarkArgs], {
+): BenchmarkRun {
+  console.error(`Benchmarking ${basename(sample)} with ${tool}...`);
+  const result = Bun.spawnSync([process.execPath, script, sample, binary, "--tool", tool, ...benchmarkArgs], {
     stdout: "pipe",
-    stderr: "inherit",
+    stderr: "pipe",
   });
-  if (!result.success) fail(`benchmark failed for ${sample}`);
+  if (!result.success) {
+    const reason = `${tool} could not generate this preview`;
+    console.error(`Skipping ${basename(sample)} with ${tool}: ${reason}`);
+    return { rows: [], failure: { sample: basename(sample), tool, reason } };
+  }
 
   const lines = result.stdout.toString().trim().split("\n");
   if (lines.length < 2) fail(`benchmark returned no results for ${sample}`);
@@ -126,14 +157,21 @@ function table(rows: string[][]): string {
   return [render(rows[0]), widths.map((width) => "─".repeat(width)).join("  "), ...rows.slice(1).map(render)].join("\n");
 }
 
+function decodePath(row: Row): string {
+  if (row.format === "JPG") return "Built-in";
+  if (row.tool !== "no-deps") return "External tool";
+  return row.primary_only ? "Primary" : "Embedded allowed";
+}
+
 function terminalReport(rows: Row[]): string {
   return table([
-    ["Format", "Sample", "Size", "Decode path", "Threads", "Median", "Min", "Max"],
+    ["Format", "Sample", "Tool", "Size", "Decode path", "Threads", "Median", "Min", "Max"],
     ...rows.map((row) => [
       row.format,
       row.sample,
+      row.tool,
       `${row.size}px`,
-      row.primary_only ? "Primary" : "Embedded allowed",
+      decodePath(row),
       row.threads,
       seconds(row.median_seconds),
       seconds(Math.min(...row.seconds)),
@@ -142,16 +180,23 @@ function terminalReport(rows: Row[]): string {
   ]);
 }
 
-function markdownReport(metadata: Metadata, rows: Row[], binary: string): string {
+function markdownReport(
+  metadata: Metadata,
+  rows: Row[],
+  failures: NonNullable<BenchmarkRun["failure"]>[],
+  binary: string,
+): string {
   const generated = new Date().toISOString();
   const measuredRuns = rows[0]?.seconds.length ?? 0;
   const sizes = [...new Set(rows.map((row) => row.size))].join(", ");
   const threads = [...new Set(rows.map((row) => row.threads))].join(", ");
+  const tools = [...new Set(rows.map((row) => row.tool))].join(", ");
   const body = rows.map((row) => [
     row.format,
     `\`${row.sample}\``,
+    `\`${row.tool}\``,
     `${row.size}px`,
-    row.primary_only ? "Primary image" : "Embedded allowed",
+    decodePath(row),
     row.threads,
     seconds(row.median_seconds),
     seconds(Math.min(...row.seconds)),
@@ -164,8 +209,8 @@ function markdownReport(metadata: Metadata, rows: Row[], binary: string): string
 
 This report compares preview generation for the JPEG, HEIC, and RAF samples in \`bench/\`.
 Each result is the median of ${measuredRuns} measured runs after one warm-up. The benchmark uses
-the built-in decoding pipeline through \`--no-deps\` and validates that every run creates a
-non-empty JPEG preview.
+each selected backend and validates that every run creates a non-empty JPEG preview. The tool
+selection affects HEIC and RAW decoding; ordinary JPEG input uses Still's built-in image path.
 
 - Generated: ${generated}
 - Platform: \`${metadata.platform}\`
@@ -174,31 +219,51 @@ non-empty JPEG preview.
 - Copies per run: ${metadata.copies}
 - Preview sizes: ${sizes}px
 - Rayon threads: ${threads}
+- Tools: ${tools}
 
 ## Results
 
-Format | Sample | Size | Decode path | Threads | Median | Min | Max
---- | --- | ---: | --- | ---: | ---: | ---: | ---:
+Format | Sample | Tool | Size | Decode path | Threads | Median | Min | Max
+--- | --- | --- | ---: | --- | ---: | ---: | ---: | ---:
 ${body.join("\n")}
+${failures.length === 0 ? "" : `
+## Unsupported or failed combinations
+
+Tool | Sample | Result
+--- | --- | ---
+${failures.map((failure) => `\`${failure.tool}\` | \`${failure.sample}\` | ${failure.reason}`).join("\n")}
+`}
 `;
 }
 
 function main(): void {
-  const { output, benchmarkArgs } = parseArgs(Bun.argv.slice(2));
+  const { output, benchmarkArgs, tools } = parseArgs(Bun.argv.slice(2));
   const root = join(import.meta.dir, "..");
   const script = realpathSync(join(import.meta.dir, "benchmark_previews.ts"));
   const binary = realpathSync(join(root, "target", "release", "still"));
   const samples = ["DSCF0656.jpg", "DSCF0656.HEIC", "DSCF0750.RAF"]
     .map((name) => realpathSync(join(root, "bench", name)));
 
-  const runs = samples.map((sample) => runBenchmark(script, sample, binary, benchmarkArgs));
+  const runs = tools.flatMap((tool) => samples.map(
+    (sample) => runBenchmark(script, sample, binary, tool, benchmarkArgs),
+  ));
   const rows = runs.flatMap((run) => run.rows);
+  const failures = runs.flatMap((run) => run.failure === undefined ? [] : [run.failure]);
+  const metadata = runs.find((run) => run.metadata !== undefined)?.metadata;
+  if (metadata === undefined || rows.length === 0) fail("all benchmark combinations failed");
   if (output !== undefined) {
-    writeFileSync(output, markdownReport(runs[0].metadata, rows, binary));
+    writeFileSync(output, markdownReport(metadata, rows, failures, binary));
     console.log(`Wrote benchmark report to ${output}`);
   } else {
-    console.log(`\nStill preview benchmark — ${runs[0].metadata.platform}, ${runs[0].metadata.cpu_count} CPUs\n`);
+    console.log(`\nStill preview benchmark — ${metadata.platform}, ${metadata.cpu_count} CPUs\n`);
     console.log(terminalReport(rows));
+    if (failures.length > 0) {
+      console.log("\nUnsupported or failed combinations:\n");
+      console.log(table([
+        ["Tool", "Sample", "Result"],
+        ...failures.map((failure) => [failure.tool, failure.sample, failure.reason]),
+      ]));
+    }
   }
 }
 
