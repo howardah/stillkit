@@ -5,6 +5,12 @@ use std::{fs, io::Cursor, path::Path, process::Command as ProcessCommand};
 mod profiles;
 mod tiff;
 
+pub(crate) struct EncodedImage {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
 pub(crate) fn copy_metadata(
     input: &Path,
     output: &Path,
@@ -21,8 +27,48 @@ pub(crate) fn copy_metadata(
         .map_err(|e| format!("Failed to copy metadata from {}: {e}", input.display()))
 }
 
+pub(crate) fn write_with_metadata(
+    input: &Path,
+    output: &Path,
+    encoded: EncodedImage,
+    normalized: bool,
+    pipeline: super::Pipeline,
+    report_tool: super::ToolReporter<'_>,
+) -> Result<(), String> {
+    if pipeline.allows_tools() {
+        fs::write(output, &encoded.bytes)
+            .map_err(|e| format!("Failed to write output file {}: {e}", output.display()))?;
+        if copy_metadata_with_exiftool(input, output, normalized, report_tool).is_ok() {
+            return Ok(());
+        }
+    }
+
+    let encoded = copy_native_bytes(
+        input,
+        encoded.bytes,
+        encoded.width,
+        encoded.height,
+        normalized,
+    )
+    .map_err(|e| format!("Failed to copy metadata from {}: {e}", input.display()))?;
+    fs::write(output, encoded)
+        .map_err(|e| format!("Failed to write output file {}: {e}", output.display()))
+}
+
 fn copy_native(input: &Path, output: &Path, normalized: bool) -> Result<(), String> {
     let (width, height) = image::image_dimensions(output).map_err(|e| e.to_string())?;
+    let bytes = fs::read(output).map_err(|e| e.to_string())?;
+    let bytes = copy_native_bytes(input, bytes, width, height, normalized)?;
+    fs::write(output, bytes).map_err(|e| e.to_string())
+}
+
+fn copy_native_bytes(
+    input: &Path,
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    normalized: bool,
+) -> Result<Vec<u8>, String> {
     let data = fs::read(input).map_err(|e| e.to_string())?;
     let parsed = exif::Reader::new()
         .read_from_container(&mut Cursor::new(&data))
@@ -62,7 +108,6 @@ fn copy_native(input: &Path, output: &Path, normalized: bool) -> Result<(), Stri
             value: Value::Short(vec![1]),
         });
     }
-    let bytes = fs::read(output).map_err(|e| e.to_string())?;
     match image::guess_format(&bytes).map_err(|e| e.to_string())? {
         image::ImageFormat::Tiff => {
             for field in parsed
@@ -76,10 +121,10 @@ fn copy_native(input: &Path, output: &Path, normalized: bool) -> Result<(), Stri
                 fields.push(field.clone());
             }
             let bytes = tiff::copy(&bytes, &fields)?;
-            return fs::write(output, bytes).map_err(|e| e.to_string());
+            return Ok(bytes);
         }
         // These output formats do not support our photographic metadata containers.
-        image::ImageFormat::Bmp | image::ImageFormat::Gif => return Ok(()),
+        image::ImageFormat::Bmp | image::ImageFormat::Gif => return Ok(bytes),
         _ => {}
     }
     let mut writer = exif::experimental::Writer::new();
@@ -102,8 +147,7 @@ fn copy_native(input: &Path, output: &Path, normalized: bool) -> Result<(), Stri
     }
     container.set_exif(Some(exif.into()));
     profiles::copy(input, &data, &mut container)?;
-    let bytes = container.encoder().bytes();
-    fs::write(output, bytes).map_err(|e| e.to_string())
+    Ok(container.encoder().bytes().to_vec())
 }
 
 fn portable_field(field: &Field) -> bool {
@@ -226,4 +270,52 @@ fn copy_metadata_with_exiftool(
         output_path.display(),
         stderr.trim()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, ImageEncoder, RgbImage};
+
+    #[test]
+    fn built_in_writer_adds_metadata_before_creating_output() {
+        let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg");
+        let output = std::env::temp_dir().join(format!(
+            "stillkit-metadata-memory-write-{}.jpg",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        let image = DynamicImage::ImageRgb8(RgbImage::new(7, 5));
+        let mut encoded = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut encoded)
+            .write_image(image.as_bytes(), 7, 5, image.color().into())
+            .unwrap();
+
+        write_with_metadata(
+            &input,
+            &output,
+            EncodedImage {
+                bytes: encoded,
+                width: 7,
+                height: 5,
+            },
+            false,
+            super::super::Pipeline::BuiltIn,
+            &|_| panic!("built-in metadata must not invoke an external tool"),
+        )
+        .unwrap();
+
+        assert_eq!(image::image_dimensions(&output).unwrap(), (7, 5));
+        let file = fs::File::open(&output).unwrap();
+        let metadata = exif::Reader::new()
+            .read_from_container(&mut std::io::BufReader::new(file))
+            .unwrap();
+        assert_eq!(
+            metadata
+                .get_field(Tag::PixelXDimension, In::PRIMARY)
+                .and_then(|field| field.value.get_uint(0)),
+            Some(7)
+        );
+        fs::remove_file(output).unwrap();
+    }
 }

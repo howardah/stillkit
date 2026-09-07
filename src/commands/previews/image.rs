@@ -23,12 +23,19 @@ pub(super) fn generate_preview(
     options: PreviewOptions,
     report_tool: crate::shared::ToolReporter<'_>,
 ) -> Result<(), String> {
-    let orientation_normalized =
-        generate_preview_image(input_path, output_path, options, report_tool)?;
-    if !options.clear_metadata {
-        crate::shared::metadata::copy_metadata(
+    let (bytes, width, height, orientation_normalized) =
+        generate_preview_image(input_path, options, report_tool)?;
+    if options.clear_metadata {
+        write_preview(output_path, &bytes)?;
+    } else {
+        crate::shared::metadata::write_with_metadata(
             input_path,
             output_path,
+            crate::shared::metadata::EncodedImage {
+                bytes,
+                width,
+                height,
+            },
             orientation_normalized,
             options.pipeline,
             report_tool,
@@ -65,10 +72,9 @@ pub(super) fn do_generate_preview(
 
 fn generate_preview_image(
     input_path: &Path,
-    output_path: &Path,
     options: PreviewOptions,
     report_tool: crate::shared::ToolReporter<'_>,
-) -> Result<bool, String> {
+) -> Result<(Vec<u8>, u32, u32, bool), String> {
     let normalized = super::raw::is_raw(input_path) || is_heic_family(input_path);
     let img = if normalized {
         super::decoding::load_preview(input_path, options, report_tool)?
@@ -82,16 +88,17 @@ fn generate_preview_image(
 
     let bytes = encode_image(&resized, options.format, options.quality)
         .map_err(|e| format!("Failed to encode image {}: {}", input_path.display(), e))?;
+    Ok((bytes, resized.width(), resized.height(), normalized))
+}
 
-    fs::write(output_path, &bytes).map_err(|e| {
+fn write_preview(output_path: &Path, bytes: &[u8]) -> Result<(), String> {
+    fs::write(output_path, bytes).map_err(|e| {
         format!(
             "Failed to write output file {}: {}",
             output_path.display(),
             e
         )
-    })?;
-
-    Ok(normalized)
+    })
 }
 
 pub(super) fn encode_image(

@@ -51,8 +51,10 @@ these directly with the user's batch or infer Windows/Linux performance.
   large, dimensionally consistent, and compatible in aspect ratio, transforms,
   orientation, and color metadata. Unsupported crops, HDR/color cases, malformed
   JPEGs, and incomplete baseline entropy data fall back to primary decoding.
-- The source bytes are reused when the embedded attempt falls back. Metadata
-  copying still rereads the source; that is a separate remaining opportunity.
+- The source bytes are reused when the embedded attempt falls back. Built-in
+  metadata copying now edits the encoded preview in memory, avoiding a dimension
+  probe, full output reread, and preliminary output write. It still rereads the
+  source; sharing decoded source bytes is a separate remaining opportunity.
 - `--no-embedded-preview` disables HEIC and RAW embedded shortcuts. `--full` and
   `--max-size full` always request the primary image. Smaller sources are not
   upscaled. The shortcut is not a promise that camera-rendered and primary pixels
@@ -188,9 +190,9 @@ through `native-heic`. Users can reproduce the sweep for their own workload.
 
 The RGB resizer meets the resizing-speed and PSNR gates, preserves all tested
 fallback/metadata behavior, and produced no end-to-end median regression. Keep
-the portable optimization. HEVC decoding itself, metadata rereads, and native
-platform integration remain unchanged. No claim is made that full decoding now
-matches `sips`, or that Windows/Linux have been benchmarked.
+the portable optimization. HEVC decoding itself, metadata source rereads, and
+native platform integration remain unchanged. No claim is made that full
+decoding now matches `sips`, or that Windows/Linux have been benchmarked.
 
 Validation completed:
 
