@@ -185,8 +185,10 @@ fallback. Other pixel types retain the existing resizer. No GPU, external progra
 or new flag is required. See [Preview performance](PREVIEW_PERFORMANCE.md) for
 benchmarks, correctness safeguards, and macOS/Linux/Windows acceleration findings.
 
-Metadata copying uses `exiftool` when available, with a Rust fallback for standard
-photographic EXIF/GPS fields, supported ICC/XMP profiles, and JPEG/PNG IPTC data.
+Ordinary JPEG, PNG, and WebP previews use the Rust metadata writer first, avoiding
+an `exiftool` process launch while preserving standard photographic EXIF/GPS fields,
+supported ICC/XMP profiles, and JPEG/PNG IPTC data. HEIC and RAW keep the existing
+`exiftool`-first policy when it is available, with the Rust writer as a fallback.
 While an external tool is running, the progress label identifies it, for example
 `Generating previews [sips]` or `Adjusting exposure [exiftool]`.
 The fallback updates EXIF dimensions and orientation. Proprietary maker notes,

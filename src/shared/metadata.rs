@@ -1,9 +1,14 @@
 use exif::{Context, Field, In, Tag, Value};
 use img_parts::{DynImage, ImageEXIF};
-use std::{fs, io::Cursor, path::Path, process::Command as ProcessCommand};
+use std::{borrow::Cow, fs, io::Cursor, path::Path, process::Command as ProcessCommand};
 
 mod profiles;
+mod staged;
 mod tiff;
+
+pub(crate) fn write_atomically(output: &Path, bytes: &[u8]) -> Result<(), String> {
+    staged::write_atomically(output, bytes)
+}
 
 pub(crate) struct EncodedImage {
     pub(crate) bytes: Vec<u8>,
@@ -18,8 +23,15 @@ pub(crate) fn copy_metadata(
     pipeline: super::Pipeline,
     report_tool: super::ToolReporter<'_>,
 ) -> Result<(), String> {
+    let (width, height) = image::image_dimensions(output).map_err(|e| {
+        format!(
+            "Failed to read output dimensions for {}: {e}",
+            output.display()
+        )
+    })?;
     if pipeline.allows_tools()
-        && copy_metadata_with_exiftool(input, output, normalized, report_tool).is_ok()
+        && copy_metadata_with_exiftool(input, output, width, height, normalized, report_tool)
+            .is_ok()
     {
         return Ok(());
     }
@@ -31,47 +43,106 @@ pub(crate) fn write_with_metadata(
     input: &Path,
     output: &Path,
     encoded: EncodedImage,
+    source_bytes: Option<&[u8]>,
     normalized: bool,
     pipeline: super::Pipeline,
     report_tool: super::ToolReporter<'_>,
 ) -> Result<(), String> {
+    // The native writer is covered for ordinary raster inputs by the no-tools
+    // metadata tests (EXIF, XMP, IPTC, and ICC). Avoid starting ExifTool for
+    // those files; process startup dominates small-preview work. HEIC and RAW
+    // retain ExifTool-first handling because their profile equivalence is not
+    // established by the portable writer.
+    let prefer_native =
+        !super::decoding::is_raw(input) && !crate::shared::image::is_heic_family(input);
+    if prefer_native && !pipeline.allows_tools() {
+        let encoded = copy_native_bytes(
+            input,
+            source_bytes,
+            encoded.bytes,
+            encoded.width,
+            encoded.height,
+            normalized,
+        )
+        .map_err(|error| format!("Failed to copy metadata from {}: {error}", input.display()))?;
+        return staged::write_atomically(output, &encoded);
+    }
+    if prefer_native
+        && let Ok(native) = copy_native_bytes(
+            input,
+            source_bytes,
+            encoded.bytes.clone(),
+            encoded.width,
+            encoded.height,
+            normalized,
+        )
+    {
+        return staged::write_atomically(output, &native);
+    }
     if pipeline.allows_tools() {
-        fs::write(output, &encoded.bytes)
-            .map_err(|e| format!("Failed to write output file {}: {e}", output.display()))?;
-        if copy_metadata_with_exiftool(input, output, normalized, report_tool).is_ok() {
-            return Ok(());
+        let temporary = staged::write_temporary(output, &encoded.bytes)?;
+        if copy_metadata_with_exiftool(
+            input,
+            &temporary,
+            encoded.width,
+            encoded.height,
+            normalized,
+            report_tool,
+        )
+        .is_ok()
+        {
+            let result = staged::replace_output(&temporary, output);
+            if result.is_err() {
+                let _ = fs::remove_file(&temporary);
+            }
+            return result;
         }
+        let _ = fs::remove_file(&temporary);
     }
 
-    let encoded = copy_native_bytes(
+    let encoded = match copy_native_bytes(
         input,
+        source_bytes,
         encoded.bytes,
         encoded.width,
         encoded.height,
         normalized,
-    )
-    .map_err(|e| format!("Failed to copy metadata from {}: {e}", input.display()))?;
-    fs::write(output, encoded)
-        .map_err(|e| format!("Failed to write output file {}: {e}", output.display()))
+    ) {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            return Err(format!(
+                "Failed to copy metadata from {}: {error}",
+                input.display()
+            ));
+        }
+    };
+    staged::write_atomically(output, &encoded)
 }
 
 fn copy_native(input: &Path, output: &Path, normalized: bool) -> Result<(), String> {
     let (width, height) = image::image_dimensions(output).map_err(|e| e.to_string())?;
     let bytes = fs::read(output).map_err(|e| e.to_string())?;
-    let bytes = copy_native_bytes(input, bytes, width, height, normalized)?;
+    let bytes = copy_native_bytes(input, None, bytes, width, height, normalized)?;
     fs::write(output, bytes).map_err(|e| e.to_string())
 }
 
 fn copy_native_bytes(
     input: &Path,
+    source_bytes: Option<&[u8]>,
     bytes: Vec<u8>,
     width: u32,
     height: u32,
     normalized: bool,
 ) -> Result<Vec<u8>, String> {
-    let data = fs::read(input).map_err(|e| e.to_string())?;
+    // Built-in HEIC decoding has already read the complete container. Reuse it
+    // while the encoded preview is still in memory rather than rereading it
+    // solely to copy metadata. Callers only provide bytes belonging to `input`.
+    let data = match source_bytes {
+        Some(data) => Cow::Borrowed(data),
+        None => Cow::Owned(fs::read(input).map_err(|e| e.to_string())?),
+    };
     let parsed = exif::Reader::new()
-        .read_from_container(&mut Cursor::new(&data))
+        .read_from_container(&mut Cursor::new(data.as_ref()))
         .ok();
     let parsed = if parsed.is_none() && super::decoding::is_raw(input) {
         raw_exif(input).ok()
@@ -146,7 +217,7 @@ fn copy_native_bytes(
         return Err("EXIF metadata exceeds the JPEG segment limit".into());
     }
     container.set_exif(Some(exif.into()));
-    profiles::copy(input, &data, &mut container)?;
+    profiles::copy(input, data.as_ref(), &mut container)?;
     Ok(container.encoder().bytes().to_vec())
 }
 
@@ -212,17 +283,11 @@ fn raw_exif(input: &Path) -> Result<exif::Exif, String> {
 fn copy_metadata_with_exiftool(
     input_path: &Path,
     output_path: &Path,
+    width: u32,
+    height: u32,
     orientation_normalized: bool,
     report_tool: super::ToolReporter<'_>,
 ) -> Result<(), String> {
-    let (width, height) = image::image_dimensions(output_path).map_err(|e| {
-        format!(
-            "Failed to read output dimensions for {}: {}",
-            output_path.display(),
-            e
-        )
-    })?;
-
     report_tool("exiftool");
     let mut command = ProcessCommand::new("exiftool");
     command
@@ -276,6 +341,7 @@ fn copy_metadata_with_exiftool(
 mod tests {
     use super::*;
     use image::{DynamicImage, ImageEncoder, RgbImage};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn built_in_writer_adds_metadata_before_creating_output() {
@@ -299,6 +365,7 @@ mod tests {
                 width: 7,
                 height: 5,
             },
+            None,
             false,
             super::super::Pipeline::BuiltIn,
             &|_| panic!("built-in metadata must not invoke an external tool"),
@@ -317,5 +384,86 @@ mod tests {
             Some(7)
         );
         fs::remove_file(output).unwrap();
+    }
+
+    #[test]
+    fn ordinary_preview_uses_native_metadata_before_exiftool() {
+        let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg");
+        let output = std::env::temp_dir().join(format!(
+            "stillkit-native-metadata-auto-{}.jpg",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        let invoked_tool = AtomicBool::new(false);
+
+        write_with_metadata(
+            &input,
+            &output,
+            EncodedImage {
+                bytes: valid_jpeg(7, 5),
+                width: 7,
+                height: 5,
+            },
+            None,
+            false,
+            super::super::Pipeline::Auto,
+            &|_| invoked_tool.store(true, Ordering::Relaxed),
+        )
+        .unwrap();
+
+        assert!(!invoked_tool.load(Ordering::Relaxed));
+        assert_eq!(image::image_dimensions(&output).unwrap(), (7, 5));
+        fs::remove_file(output).unwrap();
+    }
+
+    #[test]
+    fn failed_metadata_copy_keeps_the_existing_preview() {
+        let directory = std::env::temp_dir().join(format!(
+            "stillkit-metadata-atomic-write-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let input = directory.join("missing.jpg");
+        let output = directory.join("preview.jpg");
+        fs::write(&output, b"previous preview").unwrap();
+
+        let error = write_with_metadata(
+            &input,
+            &output,
+            EncodedImage {
+                bytes: vec![0xff, 0xd8, 0xff, 0xd9],
+                width: 1,
+                height: 1,
+            },
+            None,
+            false,
+            super::super::Pipeline::BuiltIn,
+            &|_| unreachable!("built-in pipeline must not invoke an external tool"),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("missing.jpg"));
+        assert_eq!(fs::read(&output).unwrap(), b"previous preview");
+        assert!(fs::read_dir(&directory).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".still-")
+        }));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn valid_jpeg(width: u32, height: u32) -> Vec<u8> {
+        let image = DynamicImage::ImageRgb8(RgbImage::new(width, height));
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut bytes)
+            .write_image(image.as_bytes(), width, height, image.color().into())
+            .unwrap();
+        bytes
     }
 }

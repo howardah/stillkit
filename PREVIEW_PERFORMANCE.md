@@ -259,6 +259,37 @@ HEIC median from 3.906 s to 1.708 s across three measured runs (56.3%). It also 
 release binary from 20,403,392 to 20,469,272 bytes. `sips` still won this primary workload, and the
 feature remains opt-in because its licensing/distribution assumptions require explicit review.
 
+## Native metadata and I/O follow-up
+
+Automatic previews now use the built-in metadata writer before ExifTool for ordinary JPEG, PNG,
+and WebP inputs. Existing tests cover preservation of standard EXIF/GPS, ICC, XMP, and supported
+IPTC data for these formats. HEIC and RAW retain ExifTool-first metadata handling because equivalent
+profile preservation has not been established for those containers. Built-in HEIC decoding also
+shares its already-read source bytes with metadata extraction, and ExifTool receives the known
+encoded dimensions instead of probing the output again. Completed previews are staged beside their
+destination and renamed into place so a failed metadata operation does not truncate an existing
+preview.
+
+Alternating before/after release runs on the same macOS/Intel machine used one warm-up and five
+measurements per binary. The large JPEG gain is the avoided ExifTool process launch. HEIC and RAF
+results stayed within the 5% regression threshold; the small movements are consistent with run
+noise.
+
+| Input / maximum size | Before median | After median | Change |
+| --- | ---: | ---: | ---: |
+| JPEG automatic, 1000 px | 768.6 ms | 322.5 ms | 58.0% faster |
+| JPEG automatic, 2000 px | 924.9 ms | 424.6 ms | 54.1% faster |
+| HEIC no-deps embedded, 1000 px | 93.5 ms | 93.2 ms | 0.3% faster |
+| HEIC automatic, 1000 px | 544.1 ms | 546.5 ms | 0.4% slower |
+| HEIC automatic, 2000 px | 987.9 ms | 1.013 s | 2.6% slower |
+| RAF automatic, 1000 px | 776.5 ms | 778.3 ms | 0.2% slower |
+| RAF automatic, 2000 px | 801.1 ms | 817.5 ms | 2.0% slower |
+
+The updated release binary was 20,430,872 bytes versus 20,463,344 bytes for an exact default-feature
+build of the pre-change revision, a reduction of 32,472 bytes (0.16%). Pixel decoding, resizing,
+encoding settings, and the HEIC/RAW
+external-decoder fallback order are unchanged by this follow-up.
+
 ### Reproducing the measurements
 
 Preserve a release binary before changing the implementation, then build the new

@@ -2,9 +2,11 @@ use super::OutputFormat;
 use crate::shared::Pipeline;
 use crate::shared::image::{is_heic_family, load_image};
 use image::{DynamicImage, ImageEncoder};
+#[cfg(all(test, feature = "native-heic"))]
+use std::fs;
 #[cfg(test)]
 use std::process::Command as ProcessCommand;
-use std::{fs, io::Cursor, path::Path};
+use std::{io::Cursor, path::Path};
 
 #[derive(Clone, Copy)]
 pub(super) struct PreviewOptions {
@@ -17,26 +19,34 @@ pub(super) struct PreviewOptions {
     pub pipeline: Pipeline,
 }
 
+struct GeneratedPreview {
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    orientation_normalized: bool,
+    source_bytes: Option<Vec<u8>>,
+}
+
 pub(super) fn generate_preview(
     input_path: &Path,
     output_path: &Path,
     options: PreviewOptions,
     report_tool: crate::shared::ToolReporter<'_>,
 ) -> Result<(), String> {
-    let (bytes, width, height, orientation_normalized) =
-        generate_preview_image(input_path, options, report_tool)?;
+    let preview = generate_preview_image(input_path, options, report_tool)?;
     if options.clear_metadata {
-        write_preview(output_path, &bytes)?;
+        write_preview(output_path, &preview.bytes)?;
     } else {
         crate::shared::metadata::write_with_metadata(
             input_path,
             output_path,
             crate::shared::metadata::EncodedImage {
-                bytes,
-                width,
-                height,
+                bytes: preview.bytes,
+                width: preview.width,
+                height: preview.height,
             },
-            orientation_normalized,
+            preview.source_bytes.as_deref(),
+            preview.orientation_normalized,
             options.pipeline,
             report_tool,
         )?;
@@ -74,31 +84,30 @@ fn generate_preview_image(
     input_path: &Path,
     options: PreviewOptions,
     report_tool: crate::shared::ToolReporter<'_>,
-) -> Result<(Vec<u8>, u32, u32, bool), String> {
+) -> Result<GeneratedPreview, String> {
     let normalized = super::raw::is_raw(input_path) || is_heic_family(input_path);
-    let img = if normalized {
-        super::decoding::load_preview(input_path, options, report_tool)?
-            .into_rgb8()
-            .into()
+    let (img, source_bytes) = if normalized {
+        let decoded = super::decoding::load_preview(input_path, options, report_tool)?;
+        (decoded.image.into_rgb8().into(), decoded.source_bytes)
     } else {
-        load_image(input_path)?
+        (load_image(input_path)?, None)
     };
 
     let resized = super::resize::preview(img, options.max_dimension, options.full);
 
     let bytes = encode_image(&resized, options.format, options.quality)
         .map_err(|e| format!("Failed to encode image {}: {}", input_path.display(), e))?;
-    Ok((bytes, resized.width(), resized.height(), normalized))
+    Ok(GeneratedPreview {
+        bytes,
+        width: resized.width(),
+        height: resized.height(),
+        orientation_normalized: normalized,
+        source_bytes,
+    })
 }
 
 fn write_preview(output_path: &Path, bytes: &[u8]) -> Result<(), String> {
-    fs::write(output_path, bytes).map_err(|e| {
-        format!(
-            "Failed to write output file {}: {}",
-            output_path.display(),
-            e
-        )
-    })
+    crate::shared::metadata::write_atomically(output_path, bytes)
 }
 
 pub(super) fn encode_image(
