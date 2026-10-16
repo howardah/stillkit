@@ -10,26 +10,7 @@ use std::{io::Cursor, path::Path};
 const XMP_PREFIX: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 
 pub(super) fn copy(input: &Path, data: &[u8], target: &mut DynImage) -> Result<(), String> {
-    let mut icc = None;
-    let mut xmp = None;
-    let mut iptc = None;
-    if crate::shared::image::is_heic_family(input) {
-        xmp = heic::DecoderConfig::new()
-            .extract_xmp(data)
-            .ok()
-            .flatten()
-            .map(|v| v.into_owned());
-    } else if let Ok(reader) = image::ImageReader::new(Cursor::new(data)).with_guessed_format()
-        && let Ok(mut decoder) = reader.into_decoder()
-    {
-        icc = decoder.icc_profile().ok().flatten();
-        xmp = decoder.xmp_metadata().ok().flatten();
-        iptc = if data.starts_with(&[0xff, 0xd8]) {
-            jpeg_iptc(data)
-        } else {
-            decoder.iptc_metadata().ok().flatten()
-        };
-    }
+    let Profiles { icc, xmp, iptc } = extract(input, data)?;
     target.set_icc_profile(icc.map(Bytes::from));
     match target {
         DynImage::Jpeg(jpeg) => {
@@ -108,6 +89,70 @@ pub(super) fn copy(input: &Path, data: &[u8], target: &mut DynImage) -> Result<(
         }
     }
     Ok(())
+}
+
+pub(crate) struct Profiles {
+    pub icc: Option<Vec<u8>>,
+    pub xmp: Option<Vec<u8>>,
+    pub iptc: Option<Vec<u8>>,
+}
+
+pub(crate) fn extract(input: &Path, data: &[u8]) -> Result<Profiles, String> {
+    let mut icc = None;
+    let mut xmp = None;
+    let mut iptc = None;
+    if crate::shared::jxl::is_jxl(input) {
+        icc = Some(crate::shared::jxl::srgb_profile()?);
+        xmp = crate::shared::jxl::xmp(data)?;
+    } else if crate::shared::image::is_heic_family(input) {
+        xmp = heic::DecoderConfig::new()
+            .extract_xmp(data)
+            .ok()
+            .flatten()
+            .map(|v| v.into_owned());
+    } else if let Ok(reader) = image::ImageReader::new(Cursor::new(data)).with_guessed_format()
+        && let Ok(mut decoder) = reader.into_decoder()
+    {
+        icc = decoder.icc_profile().ok().flatten();
+        xmp = decoder.xmp_metadata().ok().flatten();
+        iptc = if data.starts_with(&[0xff, 0xd8]) {
+            jpeg_iptc(data)
+        } else {
+            decoder.iptc_metadata().ok().flatten()
+        };
+    }
+    // TIFF-based RAW containers may expose IPTC/XMP without being raster-decodable.
+    if let Ok(exif) = exif::Reader::new().read_from_container(&mut Cursor::new(data)) {
+        let bytes = |id| {
+            exif.get_field(exif::Tag(exif::Context::Tiff, id), exif::In::PRIMARY)
+                .map(|field| match &field.value {
+                    exif::Value::Byte(v) | exif::Value::Undefined(v, _) => v.clone(),
+                    exif::Value::Ascii(v) => v.concat(),
+                    exif::Value::Long(v) => v
+                        .iter()
+                        .flat_map(|v| {
+                            if exif.little_endian() {
+                                v.to_le_bytes()
+                            } else {
+                                v.to_be_bytes()
+                            }
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                })
+                .filter(|v| !v.is_empty())
+        };
+        if xmp.is_none() {
+            xmp = bytes(700);
+        }
+        if iptc.is_none() {
+            iptc = bytes(33723);
+        }
+        if icc.is_none() {
+            icc = bytes(34675);
+        }
+    }
+    Ok(Profiles { icc, xmp, iptc })
 }
 
 fn jpeg_iptc(data: &[u8]) -> Option<Vec<u8>> {

@@ -86,6 +86,9 @@ fn load_preview_image(
     let pixel_width = max_width.max(1) as u32;
     let pixel_height = (max_height.max(1) as u32).saturating_mul(2);
 
+    if crate::shared::jxl::is_jxl(path) {
+        return load_image(path);
+    }
     match load_image_with_magick(path, pixel_width, pixel_height) {
         Ok(Some(image)) => Ok(image),
         Ok(None) => load_image(path),

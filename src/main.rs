@@ -51,8 +51,16 @@ fn main() {
     match matches.subcommand() {
         Some(("classify", sub_m)) => classify::run(sub_m),
         Some(("organize", sub_m)) => organize::run(sub_m),
-        Some(("exposure", sub_m)) => exposure::run(sub_m),
-        Some(("previews", sub_m)) => previews::run(sub_m),
+        Some(("exposure", sub_m)) => {
+            if !exposure::run(sub_m) {
+                std::process::exit(1);
+            }
+        }
+        Some(("previews", sub_m)) => {
+            if !previews::run(sub_m) {
+                std::process::exit(1);
+            }
+        }
         Some(("rate", sub_m)) => rate::run(sub_m),
         _ => {
             if matches.get_one::<String>("directory").is_some() {
@@ -97,5 +105,55 @@ mod tests {
             ])
             .expect("exposure should be a valid subcommand");
         assert_eq!(matches.subcommand_name(), Some("exposure"));
+    }
+}
+
+#[cfg(test)]
+mod jxl_cli_tests {
+    use super::cli;
+    #[test]
+    fn quality_defaults_conflicts_and_lossless_forms() {
+        for (command, default) in [("previews", 75), ("exposure", 90)] {
+            let args = ["still", command, "photo.png", "--format", "jxl"];
+            let matches = cli().try_get_matches_from(args).unwrap();
+            let (_, matches) = matches.subcommand().unwrap();
+            assert_eq!(matches.get_one::<u8>("quality"), Some(&default));
+            assert!(
+                cli()
+                    .try_get_matches_from(args.into_iter().chain(["--lossless"]))
+                    .is_ok()
+            );
+            assert!(
+                cli()
+                    .try_get_matches_from(args.into_iter().chain(["--lossless", "--quality", "90"]))
+                    .is_err()
+            );
+            assert!(
+                cli()
+                    .try_get_matches_from(args.into_iter().chain(["--quality", "101"]))
+                    .is_err()
+            );
+            assert!(
+                cli()
+                    .try_get_matches_from(args.into_iter().chain(["--quality", "0"]))
+                    .is_ok()
+            );
+            assert!(
+                cli()
+                    .try_get_matches_from(args.into_iter().chain([
+                        "--dry-run",
+                        "--allow-iptc-loss",
+                        "--clear-metadata"
+                    ]))
+                    .is_ok()
+            );
+        }
+        assert!(cli().try_get_matches_from(["still", "exposure"]).is_err());
+        assert!(
+            cli()
+                .try_get_matches_from(["still", "previews", "--format", "invalid"])
+                .is_err()
+        );
+        assert!(cli().try_get_matches_from(["still", "photos"]).is_ok());
     }
 }

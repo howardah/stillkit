@@ -1,5 +1,6 @@
 pub(crate) mod decoding;
 pub(crate) mod image;
+pub(crate) mod jxl;
 pub(crate) mod metadata;
 
 pub(crate) type ToolReporter<'a> = &'a (dyn Fn(&str) + Sync);

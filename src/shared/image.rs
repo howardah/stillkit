@@ -9,7 +9,8 @@ pub(crate) fn is_supported_image(path: &Path) -> bool {
             .is_some_and(|extension| {
                 matches!(
                     extension.to_ascii_lowercase().as_str(),
-                    "jpg"
+                    "jxl"
+                        | "jpg"
                         | "jpeg"
                         | "png"
                         | "webp"
@@ -36,7 +37,9 @@ pub(crate) fn is_heic_family(path: &Path) -> bool {
 }
 
 pub(crate) fn load_image(path: &Path) -> Result<DynamicImage, String> {
-    if is_heic_family(path) {
+    if super::jxl::is_jxl(path) {
+        super::jxl::load(path)
+    } else if is_heic_family(path) {
         load_heic_image(path)
     } else {
         image::ImageReader::open(path)

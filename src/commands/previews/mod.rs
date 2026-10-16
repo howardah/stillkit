@@ -22,6 +22,7 @@ enum OutputFormat {
     Jpeg,
     Png,
     WebP,
+    Jxl,
 }
 
 impl OutputFormat {
@@ -30,6 +31,7 @@ impl OutputFormat {
             "jpg" | "jpeg" => Some(Self::Jpeg),
             "png" => Some(Self::Png),
             "webp" => Some(Self::WebP),
+            "jxl" => Some(Self::Jxl),
             _ => None,
         }
     }
@@ -39,6 +41,7 @@ impl OutputFormat {
             Self::Jpeg => ImageFormat::Jpeg,
             Self::Png => ImageFormat::Png,
             Self::WebP => ImageFormat::WebP,
+            Self::Jxl => unreachable!("JXL uses its dedicated encoder"),
         }
     }
 
@@ -47,6 +50,7 @@ impl OutputFormat {
             Self::Jpeg => "jpg",
             Self::Png => "png",
             Self::WebP => "webp",
+            Self::Jxl => "jxl",
         }
     }
 }
@@ -62,6 +66,8 @@ struct PreviewConfig {
     use_embedded: bool,
     clear_metadata: bool,
     quality: u8,
+    lossless: bool,
+    policy: crate::shared::jxl::approval::Policy,
     pipeline: Pipeline,
 }
 
@@ -85,13 +91,14 @@ impl PreviewConfig {
             use_embedded: self.use_embedded,
             clear_metadata: self.clear_metadata,
             quality: self.quality,
+            lossless: self.lossless,
             pipeline: self.pipeline,
         }
     }
 }
 
 pub fn subcommand() -> Command {
-    Command::new("previews")
+    crate::shared::jxl::approval::arguments(Command::new("previews")
         .about("Generate preview images")
         .arg(
             Arg::new("no-embedded-preview")
@@ -140,7 +147,8 @@ pub fn subcommand() -> Command {
             Arg::new("format")
                 .short('f')
                 .long("format")
-                .help("Output format: jpg, png, or webp (defaults to jpg)")
+                .help("Output format: jpg, png, webp, or jxl (defaults to jpg)")
+                .value_parser(["jpg", "jpeg", "png", "webp", "jxl"])
                 .value_name("FORMAT")
                 .default_value("jpg"),
         )
@@ -148,7 +156,7 @@ pub fn subcommand() -> Command {
             Arg::new("quality")
                 .short('q')
                 .long("quality")
-                .help("JPEG/WebP quality from 0 (most compressed) to 100 (best quality)")
+                .help("JPEG/WebP/JXL quality from 0 (most compressed) to 100 (best quality)")
                 .value_name("QUALITY")
                 .value_parser(clap::value_parser!(u8).range(0..=100))
                 .default_value("75"),
@@ -172,9 +180,10 @@ pub fn subcommand() -> Command {
                 .help("Strip EXIF/XMP/IPTC metadata from generated previews")
                 .action(ArgAction::SetTrue),
         )
+    )
 }
 
-pub fn run(matches: &clap::ArgMatches) {
+pub fn run(matches: &clap::ArgMatches) -> bool {
     let input_paths: Vec<PathBuf> = matches
         .get_many::<String>("input")
         .map(|values| values.map(PathBuf::from).collect())
@@ -191,7 +200,7 @@ pub fn run(matches: &clap::ArgMatches) {
     } else {
         if let Some(path) = input_paths.iter().find(|path| !path.is_file()) {
             eprintln!("Input image is not a file: {}", path.display());
-            return;
+            return false;
         }
         let output_dir = input_paths[0]
             .parent()
@@ -206,6 +215,10 @@ pub fn run(matches: &clap::ArgMatches) {
     let format_str = matches.get_one::<String>("format").unwrap();
     let format = OutputFormat::from_str(format_str).unwrap_or(OutputFormat::Jpeg);
 
+    if matches.get_flag("lossless") && !matches!(format, OutputFormat::Jxl) {
+        eprintln!("--lossless requires --format jxl");
+        return false;
+    }
     let recursive = matches.get_flag("recursive");
     let full = matches.get_flag("full") || max_size.eq_ignore_ascii_case("full");
     let clear_metadata = matches.get_flag("clear_metadata");
@@ -221,6 +234,8 @@ pub fn run(matches: &clap::ArgMatches) {
         use_embedded: !matches.get_flag("no-embedded-preview"),
         clear_metadata,
         quality,
+        lossless: matches.get_flag("lossless"),
+        policy: crate::shared::jxl::approval::Policy::from_matches(matches),
         pipeline: match matches.get_one::<String>("tool").map(String::as_str) {
             Some("magick") => Pipeline::Magick,
             Some("sips") => Pipeline::Sips,
@@ -228,5 +243,5 @@ pub fn run(matches: &clap::ArgMatches) {
         },
     };
 
-    generate_previews(&config);
+    generate_previews(&config)
 }

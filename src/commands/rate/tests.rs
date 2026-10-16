@@ -112,3 +112,32 @@ fn temp_test_dir(label: &str) -> PathBuf {
         .as_nanos();
     std::env::temp_dir().join(format!("stillkit-rate-{label}-{}-{nanos}", process::id()))
 }
+
+#[test]
+fn imports_rating_to_jxl() {
+    let temp_root = temp_test_dir("import-jxl");
+    let from_dir = temp_root.join("from");
+    let to_dir = temp_root.join("to");
+    fs::create_dir_all(&from_dir).expect("create from dir");
+    fs::create_dir_all(&to_dir).expect("create to dir");
+
+    let source = from_dir.join("DSCF0655_★☆☆☆☆.webp");
+    let target = to_dir.join("DSCF0655.JXL");
+    fs::write(&source, b"source").expect("write source");
+    fs::write(&target, b"target").expect("write target");
+
+    let (rating_index, _) =
+        build_rating_index(&collect_import_paths(&from_dir).expect("collect source paths"));
+    let entry = image_entry_for_path(target.clone());
+    let rating = rating_index
+        .get(&normalized_name_key(&entry.original_stem))
+        .copied()
+        .expect("rating should exist");
+
+    rename_with_rating(&entry, rating).expect("rename target");
+
+    assert!(!target.exists());
+    assert!(to_dir.join("DSCF0655_★☆☆☆☆.JXL").exists());
+
+    let _ = fs::remove_dir_all(temp_root);
+}

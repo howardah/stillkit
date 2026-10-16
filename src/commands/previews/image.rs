@@ -16,6 +16,7 @@ pub(super) struct PreviewOptions {
     pub use_embedded: bool,
     pub clear_metadata: bool,
     pub quality: u8,
+    pub lossless: bool,
     pub pipeline: Pipeline,
 }
 
@@ -74,6 +75,7 @@ pub(super) fn do_generate_preview(
             use_embedded: true,
             clear_metadata,
             quality,
+            lossless: false,
             pipeline: Pipeline::Auto,
         },
         &|_| {},
@@ -93,15 +95,30 @@ fn generate_preview_image(
         (load_image(input_path)?, None)
     };
 
+    let img = if matches!(options.format, OutputFormat::Jxl) {
+        crate::shared::jxl::normalize(img, input_path)?
+    } else {
+        img
+    };
     let resized = super::resize::preview(img, options.max_dimension, options.full);
 
-    let bytes = encode_image(&resized, options.format, options.quality)
-        .map_err(|e| format!("Failed to encode image {}: {}", input_path.display(), e))?;
+    let bytes = if matches!(options.format, OutputFormat::Jxl) {
+        crate::shared::jxl::encode(
+            &resized,
+            crate::shared::jxl::Encoding {
+                quality: options.quality,
+                lossless: options.lossless,
+            },
+        )?
+    } else {
+        encode_image(&resized, options.format, options.quality)
+            .map_err(|e| format!("Failed to encode image {}: {}", input_path.display(), e))?
+    };
     Ok(GeneratedPreview {
         bytes,
         width: resized.width(),
         height: resized.height(),
-        orientation_normalized: normalized,
+        orientation_normalized: normalized || crate::shared::jxl::is_jxl(input_path),
         source_bytes,
     })
 }
@@ -117,20 +134,36 @@ pub(super) fn encode_image(
 ) -> image::ImageResult<Vec<u8>> {
     let mut bytes = Vec::new();
     match format {
+        OutputFormat::Jxl => {
+            return crate::shared::jxl::encode(
+                image,
+                crate::shared::jxl::Encoding {
+                    quality,
+                    lossless: false,
+                },
+            )
+            .map_err(|e| image::ImageError::IoError(std::io::Error::other(e)));
+        }
         OutputFormat::Jpeg => {
             // The JPEG encoder's meaningful range starts at 1; quality 0 maps to
             // its strongest compression setting while preserving the CLI's 0-100 scale.
+            let pixels = image.to_rgb8();
             image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality.max(1))
                 .write_image(
-                    image.as_bytes(),
-                    image.width(),
-                    image.height(),
-                    image.color().into(),
+                    pixels.as_raw(),
+                    pixels.width(),
+                    pixels.height(),
+                    image::ExtendedColorType::Rgb8,
                 )?;
         }
         OutputFormat::WebP => {
+            let pixels = if image.color().has_alpha() {
+                DynamicImage::ImageRgba8(image.to_rgba8())
+            } else {
+                DynamicImage::ImageRgb8(image.to_rgb8())
+            };
             bytes.extend_from_slice(
-                &webp::Encoder::from_image(image)
+                &webp::Encoder::from_image(&pixels)
                     .map_err(|error| {
                         image::ImageError::Encoding(image::error::EncodingError::new(
                             image::error::ImageFormatHint::Name("WebP".into()),

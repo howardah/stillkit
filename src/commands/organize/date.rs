@@ -17,9 +17,15 @@ pub fn extract_date(path: &Path, source: DateSource) -> Option<NaiveDate> {
 }
 
 fn exif_date(path: &Path) -> Option<NaiveDate> {
-    let file = fs::File::open(path).ok()?;
-    let mut buf = BufReader::new(file);
-    let exif = exif::Reader::new().read_from_container(&mut buf).ok()?;
+    let exif = if crate::shared::jxl::is_jxl(path) {
+        let bytes = fs::read(path).ok()?;
+        let exif = crate::shared::jxl::exif(&bytes).ok()??;
+        exif::Reader::new().read_raw(exif).ok()?
+    } else {
+        let file = fs::File::open(path).ok()?;
+        let mut buf = BufReader::new(file);
+        exif::Reader::new().read_from_container(&mut buf).ok()?
+    };
 
     let field = exif
         .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)

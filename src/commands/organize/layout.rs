@@ -20,7 +20,7 @@ pub fn day_dir_name(start: NaiveDate, end: NaiveDate) -> String {
 pub fn is_primary(ext: &str) -> bool {
     matches!(
         ext.to_lowercase().as_str(),
-        "jpg" | "jpeg" | "heic" | "heif" | "hif" | "mp4" | "mov"
+        "jxl" | "jpg" | "jpeg" | "heic" | "heif" | "hif" | "mp4" | "mov"
     )
 }
 
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn heic_family_extensions_are_primary() {
-        for ext in ["heic", "heif", "hif", "HIF"] {
+        for ext in ["heic", "heif", "hif", "HIF", "jxl", "JXL"] {
             assert!(is_primary(ext), "{ext} should be a primary extension");
             assert_eq!(file_subdir(ext, true), None);
         }

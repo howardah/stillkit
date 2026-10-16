@@ -205,6 +205,7 @@ mod tests {
                 use_embedded: true,
                 clear_metadata: false,
                 quality: 75,
+                lossless: false,
                 pipeline: Pipeline::Auto,
             },
             &|_| tool_reported.store(true, Ordering::Relaxed),

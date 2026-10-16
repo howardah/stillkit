@@ -1,6 +1,7 @@
 use crate::shared::image::{is_heic_family, is_supported_image};
 use crate::shared::{Pipeline, decoding::is_raw};
-use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
+use clap::ArgMatches;
+mod cli;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::fs;
@@ -26,102 +27,9 @@ struct Job {
     adjustment: f64,
 }
 
-pub fn subcommand() -> Command {
-    Command::new("exposure")
-        .about("Adjust image exposure")
-        .arg(
-            Arg::new("no-deps")
-                .long("no-deps")
-                .help("Use built-in codecs and metadata handling; never launch external tools")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("inputs")
-                .help("Image files or directories to process")
-                .value_name("INPUT")
-                .required(true)
-                .num_args(1..),
-        )
-        .arg(
-            Arg::new("adjustment")
-                .short('e')
-                .long("adjustment")
-                .help("Exposure adjustment in stops, such as 1.5 or -0.2")
-                .value_name("STOPS")
-                .value_parser(value_parser!(f64))
-                .allow_hyphen_values(true)
-                .conflicts_with_all(["start", "end"]),
-        )
-        .arg(
-            Arg::new("start")
-                .long("start")
-                .help("Starting exposure adjustment in stops for a ramp")
-                .value_name("STOPS")
-                .value_parser(value_parser!(f64))
-                .allow_hyphen_values(true)
-                .requires("end"),
-        )
-        .arg(
-            Arg::new("end")
-                .long("end")
-                .help("Ending exposure adjustment in stops for a ramp")
-                .value_name("STOPS")
-                .value_parser(value_parser!(f64))
-                .allow_hyphen_values(true)
-                .requires("start"),
-        )
-        .arg(
-            Arg::new("precision")
-                .long("precision")
-                .help("Decimal places in adjusted filenames (1 or 2; defaults to 1)")
-                .value_name("PLACES")
-                .value_parser(value_parser!(u8).range(1..=2))
-                .default_value("1"),
-        )
-        .arg(
-            Arg::new("overwrite")
-                .long("overwrite")
-                .help("Overwrite the input images in place")
-                .action(ArgAction::SetTrue)
-                .conflicts_with_all(["next-to-original", "output"]),
-        )
-        .arg(
-            Arg::new("next-to-original")
-                .long("next-to-original")
-                .help("Save adjusted images beside their originals")
-                .action(ArgAction::SetTrue)
-                .conflicts_with_all(["overwrite", "output"]),
-        )
-        .arg(
-            Arg::new("output")
-                .short('o')
-                .long("output")
-                .help("Save images under this output directory")
-                .value_name("DIRECTORY")
-                .conflicts_with_all(["overwrite", "next-to-original"]),
-        )
-        .arg(
-            Arg::new("original-names")
-                .long("original-names")
-                .help("When using --output, keep original filenames instead of adjustment suffixes")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("recursive")
-                .short('r')
-                .long("recursive")
-                .help("Process directories recursively")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("force")
-                .long("force")
-                .help("Overwrite existing generated files in non-overwrite modes")
-                .action(ArgAction::SetTrue),
-        )
-}
+pub use cli::subcommand;
 
-pub fn run(matches: &ArgMatches) {
+pub fn run(matches: &ArgMatches) -> bool {
     let inputs: Vec<PathBuf> = matches
         .get_many::<String>("inputs")
         .expect("inputs is required")
@@ -133,7 +41,7 @@ pub fn run(matches: &ArgMatches) {
     let end = matches.get_one::<f64>("end").copied();
     if adjustment.is_none() && (start.is_none() || end.is_none()) {
         eprintln!("Provide --adjustment or both --start and --end.");
-        return;
+        return false;
     }
 
     let mode = if matches.get_flag("overwrite") {
@@ -147,17 +55,17 @@ pub fn run(matches: &ArgMatches) {
     let output_dir = matches.get_one::<String>("output").map(PathBuf::from);
     if mode == OutputMode::Directory && output_dir.is_none() {
         eprintln!("Provide --output DIRECTORY, or choose --overwrite / --next-to-original.");
-        return;
+        return false;
     }
     if mode != OutputMode::Directory && matches.get_flag("original-names") {
         eprintln!("--original-names can only be used with --output.");
-        return;
+        return false;
     }
 
     let images = collect_images(&inputs, matches.get_flag("recursive"));
     if images.is_empty() {
         eprintln!("No supported images found.");
-        return;
+        return false;
     }
 
     let precision = *matches.get_one::<u8>("precision").unwrap_or(&1);
@@ -174,7 +82,7 @@ pub fn run(matches: &ArgMatches) {
         .zip(&adjustments)
         .map(|(input, adjustment)| {
             processing::exposure_factor(*adjustment)?;
-            let output = output_path(
+            let mut output = output_path(
                 input,
                 &inputs,
                 mode,
@@ -183,6 +91,19 @@ pub fn run(matches: &ArgMatches) {
                 *adjustment,
                 precision,
             )?;
+            if matches.get_one::<String>("format").is_some() {
+                if mode == OutputMode::Overwrite && !crate::shared::jxl::is_jxl(input) {
+                    return Err("--overwrite cannot change the input format; use --output or --next-to-original".into());
+                }
+                if mode != OutputMode::Overwrite { output.set_extension("jxl"); }
+            }
+            if matches.value_source("quality") == Some(clap::parser::ValueSource::CommandLine)
+                && !crate::shared::jxl::is_jxl(&output) {
+                return Err("--quality requires JXL output (use --format jxl)".into());
+            }
+            if matches.get_flag("lossless") && !crate::shared::jxl::is_jxl(&output) {
+                return Err("--lossless requires JXL output (use --format jxl)".into());
+            }
             Ok(Job {
                 input: input.clone(),
                 output,
@@ -197,11 +118,45 @@ pub fn run(matches: &ArgMatches) {
         Ok(jobs) => jobs,
         Err(error) => {
             eprintln!("{error}");
-            return;
+            return false;
         }
     };
 
-    let progress = ProgressBar::new(images.len() as u64);
+    let policy = crate::shared::jxl::approval::Policy::from_matches(matches);
+    let mut approval = crate::shared::jxl::approval::Approval::new(policy);
+    let clear = matches.get_flag("clear-metadata");
+    let mut skipped = 0;
+    let jobs: Vec<_> = jobs
+        .into_iter()
+        .filter(|job| {
+            if policy.dry_run {
+                println!(
+                    "Would generate {} from {}",
+                    job.output.display(),
+                    job.input.display()
+                );
+            }
+            match approval.check(&job.input, &job.output, clear) {
+                Ok(true) => true,
+                result => {
+                    if let Err(error) = result {
+                        eprintln!("{error}");
+                    }
+                    eprintln!("Skipped {}", job.input.display());
+                    skipped += 1;
+                    false
+                }
+            }
+        })
+        .collect();
+    if policy.dry_run {
+        return skipped == 0;
+    }
+    let encoding = crate::shared::jxl::Encoding {
+        quality: *matches.get_one::<u8>("quality").unwrap_or(&90),
+        lossless: matches.get_flag("lossless"),
+    };
+    let progress = ProgressBar::new(jobs.len() as u64);
     progress.set_style(
         ProgressStyle::with_template("{spinner:.green} {msg} [{bar:40.cyan/blue}] {pos}/{len}")
             .expect("valid progress template")
@@ -234,7 +189,11 @@ pub fn run(matches: &ArgMatches) {
                 &job.input,
                 output,
                 job.adjustment,
-                pipeline,
+                processing::Options {
+                    pipeline,
+                    encoding,
+                    clear_metadata: clear,
+                },
                 mode == OutputMode::Overwrite || force,
                 &report_tool,
             );
@@ -251,10 +210,12 @@ pub fn run(matches: &ArgMatches) {
     }
     progress.finish_and_clear();
     println!(
-        "Exposure complete: {} generated, {} errors",
-        images.len() - errors,
+        "Exposure complete: {} generated, {} skipped, {} errors",
+        jobs.len() - errors,
+        skipped,
         errors
     );
+    errors == 0 && skipped == 0
 }
 
 fn validate_outputs(jobs: &[Job], mode: OutputMode) -> Result<(), String> {

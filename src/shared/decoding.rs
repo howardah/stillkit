@@ -106,7 +106,7 @@ pub(crate) fn load_native(path: &Path) -> Result<DynamicImage, String> {
     if is_raw(path) {
         return develop_raw(path);
     }
-    if super::image::is_heic_family(path) {
+    if super::image::is_heic_family(path) || super::jxl::is_jxl(path) {
         return super::image::load_image(path);
     }
     let mut decoder = image::ImageReader::open(path)

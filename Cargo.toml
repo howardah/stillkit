@@ -31,3 +31,9 @@ crossterm = "0.29.0"
 webp = "0.3.1"
 rawler = "0.8"
 img-parts = "0.4"
+# Portable codecs; keep batch parallelism in Stillkit and omit optional perceptual loops.
+# Encoder: AGPL-3.0-only/commercial; decoder: MIT/Apache-2.0.
+jxl-encoder = { version = "0.3.1", default-features = false, features = ["std"] }
+jxl-oxide = { version = "0.12", default-features = false, features = ["moxcms"] }
+# Pure Rust ICC conversion, also used by image and the JXL decoder.
+moxcms = "0.8.1"

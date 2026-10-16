@@ -2,7 +2,7 @@ use exif::{Context, Field, In, Tag, Value};
 use img_parts::{DynImage, ImageEXIF};
 use std::{borrow::Cow, fs, io::Cursor, path::Path, process::Command as ProcessCommand};
 
-mod profiles;
+pub(crate) mod profiles;
 mod staged;
 mod tiff;
 
@@ -23,6 +23,9 @@ pub(crate) fn copy_metadata(
     pipeline: super::Pipeline,
     report_tool: super::ToolReporter<'_>,
 ) -> Result<(), String> {
+    if super::jxl::is_jxl(output) || super::jxl::is_jxl(input) {
+        return copy_native(input, output, normalized);
+    }
     let (width, height) = image::image_dimensions(output).map_err(|e| {
         format!(
             "Failed to read output dimensions for {}: {e}",
@@ -50,11 +53,21 @@ pub(crate) fn write_with_metadata(
 ) -> Result<(), String> {
     // The native writer is covered for ordinary raster inputs by the no-tools
     // metadata tests (EXIF, XMP, IPTC, and ICC). Avoid starting ExifTool for
-    // those files; process startup dominates small-preview work. HEIC and RAW
-    // retain ExifTool-first handling because their profile equivalence is not
-    // established by the portable writer.
-    let prefer_native =
-        !super::decoding::is_raw(input) && !crate::shared::image::is_heic_family(input);
+    // those files; process startup dominates small-preview work. HEIC is also
+    // covered by the portable reader and profile extractor. RAW retains
+    // ExifTool-first handling because its metadata equivalence is not established.
+    if super::jxl::is_jxl(output) || super::jxl::is_jxl(input) {
+        let bytes = copy_native_bytes(
+            input,
+            source_bytes,
+            encoded.bytes,
+            encoded.width,
+            encoded.height,
+            normalized,
+        )?;
+        return staged::write_atomically(output, &bytes);
+    }
+    let prefer_native = !super::decoding::is_raw(input);
     if prefer_native && !pipeline.allows_tools() {
         let encoded = copy_native_bytes(
             input,
@@ -120,7 +133,13 @@ pub(crate) fn write_with_metadata(
 }
 
 fn copy_native(input: &Path, output: &Path, normalized: bool) -> Result<(), String> {
-    let (width, height) = image::image_dimensions(output).map_err(|e| e.to_string())?;
+    let (width, height) = if super::jxl::is_jxl(output) {
+        let data = fs::read(output).map_err(|e| e.to_string())?;
+        let image = super::jxl::parse(&data)?;
+        (image.width(), image.height())
+    } else {
+        image::image_dimensions(output).map_err(|e| e.to_string())?
+    };
     let bytes = fs::read(output).map_err(|e| e.to_string())?;
     let bytes = copy_native_bytes(input, None, bytes, width, height, normalized)?;
     fs::write(output, bytes).map_err(|e| e.to_string())
@@ -141,9 +160,18 @@ fn copy_native_bytes(
         Some(data) => Cow::Borrowed(data),
         None => Cow::Owned(fs::read(input).map_err(|e| e.to_string())?),
     };
-    let parsed = exif::Reader::new()
-        .read_from_container(&mut Cursor::new(data.as_ref()))
-        .ok();
+    let jxl_exif = if super::jxl::is_jxl(input) {
+        super::jxl::exif(data.as_ref())?
+    } else {
+        None
+    };
+    let parsed = if super::jxl::is_jxl(input) {
+        jxl_exif.and_then(|bytes| exif::Reader::new().read_raw(bytes).ok())
+    } else {
+        exif::Reader::new()
+            .read_from_container(&mut Cursor::new(data.as_ref()))
+            .ok()
+    };
     let parsed = if parsed.is_none() && super::decoding::is_raw(input) {
         raw_exif(input).ok()
     } else {
@@ -171,6 +199,14 @@ fn copy_native_bytes(
             value: Value::Long(vec![value]),
         });
     }
+    if super::jxl::is_codestream(&bytes) || super::jxl::is_jxl(input) {
+        fields.retain(|field| field.tag != Tag::ColorSpace);
+        fields.push(Field {
+            tag: Tag::ColorSpace,
+            ifd_num: In::PRIMARY,
+            value: Value::Short(vec![1]),
+        });
+    }
     if normalized {
         fields.retain(|field| field.tag != Tag::Orientation);
         fields.push(Field {
@@ -179,24 +215,27 @@ fn copy_native_bytes(
             value: Value::Short(vec![1]),
         });
     }
-    match image::guess_format(&bytes).map_err(|e| e.to_string())? {
-        image::ImageFormat::Tiff => {
-            for field in parsed
-                .iter()
-                .flat_map(|exif| exif.fields())
-                .filter(|field| {
-                    field.ifd_num == In::PRIMARY
-                        && matches!(field.tag, Tag(Context::Tiff, 700 | 33723 | 34675))
-                })
-            {
-                fields.push(field.clone());
+    let jxl_output = super::jxl::is_codestream(&bytes);
+    if !jxl_output {
+        match image::guess_format(&bytes).map_err(|e| e.to_string())? {
+            image::ImageFormat::Tiff => {
+                for field in parsed
+                    .iter()
+                    .flat_map(|exif| exif.fields())
+                    .filter(|field| {
+                        field.ifd_num == In::PRIMARY
+                            && matches!(field.tag, Tag(Context::Tiff, 700 | 33723 | 34675))
+                    })
+                {
+                    fields.push(field.clone());
+                }
+                let bytes = tiff::copy(&bytes, &fields)?;
+                return Ok(bytes);
             }
-            let bytes = tiff::copy(&bytes, &fields)?;
-            return Ok(bytes);
+            // These output formats do not support our photographic metadata containers.
+            image::ImageFormat::Bmp | image::ImageFormat::Gif => return Ok(bytes),
+            _ => {}
         }
-        // These output formats do not support our photographic metadata containers.
-        image::ImageFormat::Bmp | image::ImageFormat::Gif => return Ok(bytes),
-        _ => {}
     }
     let mut writer = exif::experimental::Writer::new();
     for field in &fields {
@@ -209,6 +248,10 @@ fn copy_native_bytes(
             parsed.as_ref().is_some_and(|exif| exif.little_endian()),
         )
         .map_err(|e| e.to_string())?;
+    if jxl_output {
+        let profiles = profiles::extract(input, data.as_ref())?;
+        return super::jxl::add_metadata(bytes, &exif.into_inner(), profiles.xmp.as_deref());
+    }
     let mut container = DynImage::from_bytes(bytes.into())
         .map_err(|e| e.to_string())?
         .ok_or("Unsupported preview metadata container")?;
@@ -338,132 +381,4 @@ fn copy_metadata_with_exiftool(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use image::{DynamicImage, ImageEncoder, RgbImage};
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    #[test]
-    fn built_in_writer_adds_metadata_before_creating_output() {
-        let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg");
-        let output = std::env::temp_dir().join(format!(
-            "stillkit-metadata-memory-write-{}.jpg",
-            std::process::id()
-        ));
-        let _ = fs::remove_file(&output);
-        let image = DynamicImage::ImageRgb8(RgbImage::new(7, 5));
-        let mut encoded = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new(&mut encoded)
-            .write_image(image.as_bytes(), 7, 5, image.color().into())
-            .unwrap();
-
-        write_with_metadata(
-            &input,
-            &output,
-            EncodedImage {
-                bytes: encoded,
-                width: 7,
-                height: 5,
-            },
-            None,
-            false,
-            super::super::Pipeline::BuiltIn,
-            &|_| panic!("built-in metadata must not invoke an external tool"),
-        )
-        .unwrap();
-
-        assert_eq!(image::image_dimensions(&output).unwrap(), (7, 5));
-        let file = fs::File::open(&output).unwrap();
-        let metadata = exif::Reader::new()
-            .read_from_container(&mut std::io::BufReader::new(file))
-            .unwrap();
-        assert_eq!(
-            metadata
-                .get_field(Tag::PixelXDimension, In::PRIMARY)
-                .and_then(|field| field.value.get_uint(0)),
-            Some(7)
-        );
-        fs::remove_file(output).unwrap();
-    }
-
-    #[test]
-    fn ordinary_preview_uses_native_metadata_before_exiftool() {
-        let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("test/reference.jpg");
-        let output = std::env::temp_dir().join(format!(
-            "stillkit-native-metadata-auto-{}.jpg",
-            std::process::id()
-        ));
-        let _ = fs::remove_file(&output);
-        let invoked_tool = AtomicBool::new(false);
-
-        write_with_metadata(
-            &input,
-            &output,
-            EncodedImage {
-                bytes: valid_jpeg(7, 5),
-                width: 7,
-                height: 5,
-            },
-            None,
-            false,
-            super::super::Pipeline::Auto,
-            &|_| invoked_tool.store(true, Ordering::Relaxed),
-        )
-        .unwrap();
-
-        assert!(!invoked_tool.load(Ordering::Relaxed));
-        assert_eq!(image::image_dimensions(&output).unwrap(), (7, 5));
-        fs::remove_file(output).unwrap();
-    }
-
-    #[test]
-    fn failed_metadata_copy_keeps_the_existing_preview() {
-        let directory = std::env::temp_dir().join(format!(
-            "stillkit-metadata-atomic-write-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir(&directory).unwrap();
-        let input = directory.join("missing.jpg");
-        let output = directory.join("preview.jpg");
-        fs::write(&output, b"previous preview").unwrap();
-
-        let error = write_with_metadata(
-            &input,
-            &output,
-            EncodedImage {
-                bytes: vec![0xff, 0xd8, 0xff, 0xd9],
-                width: 1,
-                height: 1,
-            },
-            None,
-            false,
-            super::super::Pipeline::BuiltIn,
-            &|_| unreachable!("built-in pipeline must not invoke an external tool"),
-        )
-        .unwrap_err();
-
-        assert!(error.contains("missing.jpg"));
-        assert_eq!(fs::read(&output).unwrap(), b"previous preview");
-        assert!(fs::read_dir(&directory).unwrap().all(|entry| {
-            !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .contains(".still-")
-        }));
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    fn valid_jpeg(width: u32, height: u32) -> Vec<u8> {
-        let image = DynamicImage::ImageRgb8(RgbImage::new(width, height));
-        let mut bytes = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new(&mut bytes)
-            .write_image(image.as_bytes(), width, height, image.color().into())
-            .unwrap();
-        bytes
-    }
-}
+mod tests;

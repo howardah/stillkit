@@ -6,11 +6,18 @@ use std::{fs, path::Path, process::Command};
 
 mod staged;
 
+#[derive(Clone, Copy)]
+pub(super) struct Options {
+    pub pipeline: Pipeline,
+    pub encoding: crate::shared::jxl::Encoding,
+    pub clear_metadata: bool,
+}
+
 pub(super) fn apply_exposure(
     input: &Path,
     output: &Path,
     adjustment: f64,
-    pipeline: Pipeline,
+    options: Options,
     replace: bool,
     report_tool: crate::shared::ToolReporter<'_>,
 ) -> Result<(), String> {
@@ -19,8 +26,22 @@ pub(super) fn apply_exposure(
         .map_err(|e| format!("Failed to resolve {}: {e}", input.display()))?;
     let staging = staged::Output::new(output)?;
     let temporary = staging.path();
-    convert(&input, temporary, factor, pipeline, report_tool)?;
-    metadata::copy_metadata(&input, temporary, true, pipeline, report_tool)?;
+    if crate::shared::jxl::is_jxl(&input) || crate::shared::jxl::is_jxl(output) {
+        let image = decoding::load_native(&input)?;
+        let mut image = crate::shared::jxl::normalize(image, &input)?;
+        multiply(&mut image, factor);
+        if crate::shared::jxl::is_jxl(output) {
+            let bytes = crate::shared::jxl::encode(&image, options.encoding)?;
+            fs::write(temporary, bytes).map_err(|e| e.to_string())?;
+        } else {
+            encode(&image, temporary)?;
+        }
+    } else {
+        convert(&input, temporary, factor, options.pipeline, report_tool)?;
+    }
+    if !options.clear_metadata {
+        metadata::copy_metadata(&input, temporary, true, options.pipeline, report_tool)?;
+    }
     staging.persist(output, replace)
 }
 

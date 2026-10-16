@@ -139,7 +139,7 @@ location. Directory input continues to default to `<directory>/preview`.
 
 This keeps the original image dimensions and only converts into the selected preview format.
 You can also write `--max-size full`; `--full` remains available as a shorthand.
-Use `--quality 0..100` (or `-q`) to control JPEG and WebP compression; the default is 75.
+Use `--quality 0..100` (or `-q`) to control JPEG, WebP, and JPEG XL compression; the default is 75.
 By default previews keep the source photo metadata; add `--clear-metadata` to strip it.
 Preview generation requires no external programs, including when keeping metadata or using
 `--full`. For resized HEIC/HEIF/HIF and camera RAW, automatic mode first tries a suitable
@@ -185,9 +185,9 @@ fallback. Other pixel types retain the existing resizer. No GPU, external progra
 or new flag is required. See [Preview performance](PREVIEW_PERFORMANCE.md) for
 benchmarks, correctness safeguards, and macOS/Linux/Windows acceleration findings.
 
-Ordinary JPEG, PNG, and WebP previews use the Rust metadata writer first, avoiding
-an `exiftool` process launch while preserving standard photographic EXIF/GPS fields,
-supported ICC/XMP profiles, and JPEG/PNG IPTC data. HEIC and RAW keep the existing
+JPEG, PNG, WebP, HEIC, and JXL previews use the Rust metadata writer first, avoiding an
+`exiftool` process launch while preserving standard photographic EXIF/GPS fields,
+supported ICC/XMP profiles, and JPEG/PNG IPTC data. RAW keeps the existing
 `exiftool`-first policy when it is available, with the Rust writer as a fallback.
 While an external tool is running, the progress label identifies it, for example
 `Generating previews [sips]` or `Adjusting exposure [exiftool]`.
@@ -205,12 +205,62 @@ RAW delegates such as darktable or dcraw, but they are optional.
 If external conversion fails, the Rust fallback first uses a sufficiently large
 embedded JPEG for resized RAW previews. When none is available, or with `--full`,
 it develops sensor pixels with white balance, demosaicing, camera color calibration,
-and sRGB conversion. All paths support JPEG, PNG, WebP, quality settings, and the
+and sRGB conversion. All paths support JPEG, PNG, WebP, JXL, quality settings, and the
 metadata options. Rust decoding can be slower and use more memory than external
 accelerators. Corrupt files and unsupported camera variants can still fail;
 absence of external programs alone is not an error.
 Batch generation rejects inputs that map to the same output (for example,
 `photo.CR2` and `photo.jpg`); process those separately or use distinct names.
+
+**JPEG XL input and output**
+
+JPEG XL (`.jxl`, case-insensitive) works with previews, exposure, rating, rating import,
+and date-based organization. Organization reads JXL EXIF dates and treats JXL as a primary
+photo alongside JPEG and HEIC. Classification already handles arbitrary extensions.
+
+```sh
+still previews ./photos --format jxl --quality 75
+still previews photo.JXL --format png
+still previews photo.png --format jxl --full --lossless
+still exposure photo.png -e 1 --format jxl --output ./adjusted --lossless
+still exposure photo.jxl -e -0.5 --next-to-original
+```
+
+`previews --format jxl` defaults to quality 75. Exposure retains JXL for JXL inputs;
+`exposure --format jxl` converts any supported input and defaults to quality 90.
+Exposure format conversion cannot use `--overwrite` unless the source is already JXL.
+Use `--quality 0..100` (`-q`) for lossy output, or `--lossless` for exact encoder-input
+pixels. Quality 100 is the highest lossy preset, not lossless. Explicit `--quality` and
+`--lossless` conflict; `--lossless` requires JXL output. Resizing, exposure adjustment,
+and color conversion happen before encoding and can change pixels even in lossless mode.
+JPEG byte reconstruction is not provided.
+
+JXL processing uses built-in Rust codecs even when external tools are installed. It supports
+8-bit and 16-bit SDR still images and transparency; animated, HDR, and floating-point JXL
+inputs are rejected with an error. JXL pixels are rendered in sRGB; ordinary raster inputs
+with supported RGB ICC profiles are converted to sRGB for JXL output. Wide-gamut colors may
+be clipped, and unsupported profiles report an error rather than being silently ignored.
+
+EXIF and XMP are preserved using the native metadata writer, with output dimensions and
+normalized orientation updated. Source color profiles are replaced by the output's sRGB
+color description. `--clear-metadata` strips EXIF/XMP/IPTC while retaining the color
+information required to render the pixels.
+
+JXL has no standalone IPTC metadata box. When an input contains standalone IPTC, Stillkit
+asks **yes / no / yes for all** before writing JXL output; the default is **no** (skip).
+"Yes for all" applies only to this invocation. Existing XMP is retained, but standalone
+IPTC is not automatically translated into XMP. Without an interactive terminal, affected
+files are skipped unless `--allow-iptc-loss` or `--clear-metadata` is given. Unaffected
+files continue; skipped approvals and processing errors produce a nonzero exit status.
+Both commands support `--dry-run`, which reports planned outputs and required IPTC approvals
+without prompting, creating directories, writing metadata, or converting images.
+
+The default build includes `jxl-encoder` (AGPL-3.0-only/commercial), `jxl-oxide`
+(MIT/Apache-2.0), and `moxcms` (BSD-3-Clause/Apache-2.0) for portable JXL encoding, decoding, and ICC
+conversion. They add codec code and binary size without requiring CMake, C++, or installed
+conversion tools. The encoder is relatively new, buffers full images, and can be slower
+than the reference `cjxl`; large batches require memory for each concurrent image.
+Review the encoder's license alongside the existing HEIC dependency before distributing binaries.
 
 **Adjust exposure**
 
@@ -233,7 +283,7 @@ extensions. The built-in pipeline cannot encode HEIC or camera RAW, so in-place
 the same with and without external tools. Standard metadata is preserved using
 the same optional-ExifTool policy as previews; TIFF also retains standard metadata.
 BMP/GIF output does not receive photographic EXIF metadata. Exposure processes
-the first frame/image of multi-image containers.
+the first frame/image of multi-image containers, except animated JXL, which is rejected.
 
 ```sh
 # Save beside the original as photo_+1_5.jpg

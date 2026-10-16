@@ -11,18 +11,43 @@ use std::{
 };
 
 /// Generate preview images based on configuration
-pub(super) fn generate_previews(config: &PreviewConfig) {
+pub(super) fn generate_previews(config: &PreviewConfig) -> bool {
     // Collect all image files
-    let image_paths = match &config.inputs {
+    let mut image_paths = match &config.inputs {
         PreviewInputs::Directory(dir) => collect_image_files(dir, config.recursive),
         PreviewInputs::Files(paths) => paths.clone(),
     };
+
+    image_paths.sort();
+    image_paths.dedup();
+    if let PreviewInputs::Directory(input) = &config.inputs {
+        let output_root = fs::canonicalize(&config.output_dir).ok();
+        let input_root = fs::canonicalize(input).ok();
+        if output_root != input_root {
+            image_paths.retain(|path| {
+                !output_root
+                    .as_ref()
+                    .is_some_and(|root| fs::canonicalize(path).is_ok_and(|p| p.starts_with(root)))
+            });
+        }
+    }
+    let sources: std::collections::HashSet<_> = image_paths
+        .iter()
+        .filter_map(|path| fs::canonicalize(path).ok())
+        .collect();
 
     // RAW+JPEG pairs commonly share a stem. Never let parallel conversions race
     // to overwrite the same destination, even when it does not exist yet.
     let mut destinations = std::collections::HashMap::new();
     for path in &image_paths {
         let output = preview_output_path(config, path);
+        if fs::canonicalize(&output).is_ok_and(|p| sources.contains(&p)) {
+            eprintln!(
+                "Preview output would replace an input: {}. Use a separate output directory.",
+                output.display()
+            );
+            return false;
+        }
         if let Some(previous) = destinations.insert(output.clone(), path) {
             eprintln!(
                 "Preview output collision: {} and {} both produce {}. Process the files separately or give them distinct names.",
@@ -30,19 +55,39 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
                 path.display(),
                 output.display()
             );
-            return;
+            return false;
         }
     }
 
     if image_paths.is_empty() {
         let input_dir = match &config.inputs {
             PreviewInputs::Directory(dir) => dir,
-            PreviewInputs::Files(_) => unreachable!("file input cannot be empty"),
+            PreviewInputs::Files(_) => {
+                println!("No image files to process.");
+                return true;
+            }
         };
         println!("No image files found in {}.", input_dir.display());
-        return;
+        return true;
     }
 
+    if config.policy.dry_run {
+        let mut approval = crate::shared::jxl::approval::Approval::new(config.policy);
+        let mut success = true;
+        for path in &image_paths {
+            let output = preview_output_path(config, path);
+            println!(
+                "Would generate {} from {}",
+                output.display(),
+                path.display()
+            );
+            if let Err(error) = approval.check(path, &output, config.clear_metadata) {
+                eprintln!("{error}");
+                success = false;
+            }
+        }
+        return success;
+    }
     let existing_outputs = image_paths
         .iter()
         .filter(|path| preview_output_path(config, path).exists())
@@ -74,9 +119,32 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
             "All {} previews already exist. Skipping generation.",
             skipped_count
         );
-        return;
+        return true;
     }
 
+    let mut approval = crate::shared::jxl::approval::Approval::new(config.policy);
+    let mut approval_skips = 0;
+    let image_paths: Vec<_> = image_paths
+        .into_iter()
+        .filter(|path| {
+            match approval.check(
+                path,
+                &preview_output_path(config, path),
+                config.clear_metadata,
+            ) {
+                Ok(true) => true,
+                result => {
+                    if let Err(error) = result {
+                        eprintln!("{error}");
+                    }
+                    eprintln!("Skipped {}", path.display());
+                    approval_skips += 1;
+                    false
+                }
+            }
+        })
+        .collect();
+    let skipped_count = skipped_count + approval_skips;
     println!(
         "Generating previews: {} images, {}, format: {}, quality: {}, output: {}",
         image_paths.len(),
@@ -137,7 +205,7 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
     let error_count = results.iter().filter(|r| r.is_err()).count();
     for result in &results {
         if let Err(e) = result {
-            progress.println(e);
+            eprintln!("{e}");
         }
     }
 
@@ -154,7 +222,8 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
             success_count, error_count
         )
     };
-    progress.finish_with_message(summary);
+    progress.finish_and_clear();
+    println!("{summary}");
 
     if error_count > 0 {
         eprintln!(
@@ -162,6 +231,7 @@ pub(super) fn generate_previews(config: &PreviewConfig) {
             error_count
         );
     }
+    error_count == 0 && approval_skips == 0
 }
 
 fn preview_output_path(config: &PreviewConfig, input_path: &Path) -> PathBuf {
@@ -186,6 +256,9 @@ pub(super) fn prompt_existing_file_action(existing_count: usize) -> ExistingFile
         "previews"
     };
 
+    if !std::io::IsTerminal::is_terminal(&io::stdin()) {
+        return ExistingFileAction::Skip;
+    }
     loop {
         print!(
             "{} existing {} detected. Overwrite existing files or skip them? [o/s] ",
@@ -195,6 +268,7 @@ pub(super) fn prompt_existing_file_action(existing_count: usize) -> ExistingFile
 
         let mut input = String::new();
         match io::stdin().read_line(&mut input) {
+            Ok(0) => return ExistingFileAction::Skip,
             Ok(_) => match parse_existing_file_action_input(&input) {
                 Some(action) => return action,
                 None => {
@@ -290,6 +364,8 @@ mod tests {
             use_embedded: true,
             clear_metadata: true,
             quality: 75,
+            lossless: false,
+            policy: Default::default(),
             pipeline: crate::shared::Pipeline::Auto,
         };
         generate_previews(&config);
