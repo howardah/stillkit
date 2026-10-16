@@ -3,7 +3,7 @@ use clap::{Arg, ArgAction, Command};
 mod commands;
 mod shared;
 
-use commands::{classify, exposure, organize, previews, rate};
+use commands::{classify, copy, exposure, organize, previews, rate};
 
 fn cli() -> Command {
     Command::new("still")
@@ -38,6 +38,7 @@ fn cli() -> Command {
                 .help("Recursively classify files in subdirectories")
                 .action(ArgAction::SetTrue),
         )
+        .subcommand(copy::subcommand())
         .subcommand(classify::subcommand())
         .subcommand(organize::subcommand())
         .subcommand(exposure::subcommand())
@@ -58,6 +59,11 @@ fn main() {
         }
         Some(("previews", sub_m)) => {
             if !previews::run(sub_m) {
+                std::process::exit(1);
+            }
+        }
+        Some(("copy", sub_m)) => {
+            if !copy::run(sub_m) {
                 std::process::exit(1);
             }
         }

@@ -9,7 +9,7 @@ use std::process::Command as ProcessCommand;
 use std::{io::Cursor, path::Path};
 
 #[derive(Clone, Copy)]
-pub(super) struct PreviewOptions {
+pub(crate) struct PreviewOptions {
     pub max_dimension: u32,
     pub format: OutputFormat,
     pub full: bool,
@@ -28,7 +28,7 @@ struct GeneratedPreview {
     source_bytes: Option<Vec<u8>>,
 }
 
-pub(super) fn generate_preview(
+pub(crate) fn generate_preview(
     input_path: &Path,
     output_path: &Path,
     options: PreviewOptions,

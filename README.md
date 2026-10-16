@@ -40,6 +40,7 @@ The explicit subcommands are:
 | `still classify <directory>` | Classify files into extension-based directories. |
 | `still organize [directory]` | Organize photos into a date-based hierarchy; defaults to the current directory. |
 | `still exposure <inputs...>` | Adjust image exposure in photographic stops. |
+| `still copy SOURCE DESTINATION` | Convert one image to one output file. |
 | `still previews [directory | images...]` | Generate preview images. |
 | `still rate <directory>` | Rate images in the terminal UI. |
 
@@ -120,6 +121,39 @@ still rate import --from ./edited --to ./originals
 This matches files by basename while ignoring both extension and existing rating suffix, so
 `DSCF0655_★☆☆☆☆.webp` in `edited/` will update `DSCF0655.jpg` or `DSCF0655_★★★☆☆.jpg` in
 `originals/` to `DSCF0655_★☆☆☆☆.jpg`.
+
+**Convert a single image**
+
+```sh
+still copy image.jpg image.jxl
+still copy image.jpg smaller.webp --max-size 1600 --quality 85
+still copy image.png image.jxl --lossless
+still copy image.jpg output.png --clear-metadata --overwrite
+```
+
+`copy` requires exactly one source file and one destination file. It re-encodes the
+image, preserving full dimensions and metadata by default; quality defaults to 75.
+It supports the same refinement controls as `previews`: `--format`, `--max-size`,
+`--full`, `--quality`, `--lossless`, `--clear-metadata`, `--no-embedded-preview`,
+`--no-deps`, `--tool`, `--allow-iptc-loss`, and `--dry-run`. The same input formats,
+codec fallbacks, external-tool requirements, and JXL metadata limitations apply.
+Directory traversal and batch-output options are excluded.
+
+The destination extension infers JPEG (`jpg`/`jpeg`), PNG, WebP, or JXL,
+case-insensitively. Unknown or missing extensions require `--format`. When an
+explicit format disagrees with the extension (including unknown or missing
+extensions), an interactive prompt offers to change the extension, keep the
+supplied filename with the requested encoding, or cancel (the default).
+
+An existing destination prompts for overwrite approval, defaulting to No;
+`--overwrite` explicitly authorizes replacement. Unresolved prompts fail without
+an interactive terminal. The destination parent directory must already exist,
+and a destination referring to the source is always rejected. Output is staged
+on the destination filesystem and published after successful conversion.
+
+`--dry-run` writes nothing and never prompts. Unresolved format mismatches and
+existing destinations without `--overwrite` are errors. JXL IPTC approval needs
+are reported using the same dry-run policy as `previews`.
 
 **Generate full-size previews**
 

@@ -13,11 +13,11 @@ use crate::shared::{Pipeline, decoding as raw};
 mod tests;
 
 use batch::generate_previews;
-use image::PreviewOptions;
+pub(super) use image::{PreviewOptions, generate_preview};
 
 /// Supported output image formats
-#[derive(Debug, Clone, Copy, Default)]
-enum OutputFormat {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum OutputFormat {
     #[default]
     Jpeg,
     Png,
@@ -26,7 +26,7 @@ enum OutputFormat {
 }
 
 impl OutputFormat {
-    fn from_str(s: &str) -> Option<Self> {
+    pub(super) fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "jpg" | "jpeg" => Some(Self::Jpeg),
             "png" => Some(Self::Png),
@@ -45,7 +45,7 @@ impl OutputFormat {
         }
     }
 
-    fn extension(&self) -> &'static str {
+    pub(super) fn extension(&self) -> &'static str {
         match self {
             Self::Jpeg => "jpg",
             Self::Png => "png",
